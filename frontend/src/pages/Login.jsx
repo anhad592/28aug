@@ -18,8 +18,8 @@ export default function Login() {
   const { login, user } = useAuth();
   const { t } = useTranslation();
   const nav = useNavigate();
-  const [email, setEmail] = useState("admin");
-  const [password, setPassword] = useState("admin123");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
   const [busy, setBusy] = useState(false);
   // `verifying` flips on during the blocking attestation so we can show
   // a calm progress banner instead of a spinning button forever.
@@ -154,7 +154,7 @@ export default function Login() {
                   disabled={busy || verifying}
                   data-testid="login-username-input"
                   className="h-12 rounded-sm mt-1 border-slate-300 focus:border-[#E65100] focus:ring-[#E65100]"
-                  placeholder="admin"
+                  placeholder={t("login.username")}
                 />
               </div>
               <div>
