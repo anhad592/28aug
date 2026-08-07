@@ -6871,6 +6871,26 @@ async def ai_summary_dispatch(
 
 app.include_router(api_router)
 
+
+# ---- Kubernetes / deployment health probes ----
+# The platform's liveness/readiness probe calls `GET /health` at the ROOT
+# (no /api prefix). Without this route the probe gets a 404 and the pod is
+# marked unhealthy, which blocks the deployment from going live.
+@app.get("/health")
+async def health():
+    return {"status": "ok"}
+
+
+@app.get("/healthz")
+async def healthz():
+    return {"status": "ok"}
+
+
+@api_router.get("/health")
+async def api_health():
+    return {"status": "ok"}
+
+
 app.add_middleware(
     CORSMiddleware,
     allow_credentials=True,

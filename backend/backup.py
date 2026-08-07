@@ -36,10 +36,10 @@ logger = logging.getLogger("backup")
 DEFAULT_BACKUP_SETTINGS = {
     "id": "default",
     "enabled": True,
-    "gmail_user": "ganpatifillingstn@gmail.com",
+    "gmail_user": os.environ.get("GMAIL_USER", ""),
     # Gmail App Password (16 chars, spaces removed). DO NOT log this value.
-    "gmail_app_password": "qrkwtakhirqkrqpb",
-    "send_to": "ganpatifillingstn@gmail.com",
+    "gmail_app_password": os.environ.get("GMAIL_APP_PASSWORD", ""),
+    "send_to": os.environ.get("BACKUP_EMAIL_TO", os.environ.get("GMAIL_USER", "")),
     "schedule_hour": 21,   # 9 PM IST
     "schedule_minute": 0,
     "last_run_at": None,
