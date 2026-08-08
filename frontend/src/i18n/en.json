@@ -103,6 +103,8 @@
     "itemwiseOverline": "Pending — Item-wise",
     "itemwiseTitle": "Grand Total Quantity Needed (by SKU)",
     "itemwiseHint": "Sum across all pending orders",
+    "itemwiseSearchPlaceholder": "Search item by name…",
+    "itemwiseNoMatch": "No items match \"{{query}}\".",
     "fromOrders_one": "from {{count}} order",
     "fromOrders_other": "from {{count}} orders",
     "breakdownTitle": "Order-wise breakdown",

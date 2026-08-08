@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from "react";
 import { api } from "@/lib/api";
 import { useTranslation } from "react-i18next";
-import { Boxes, Package, Truck, CheckCircle2, Users, ChevronRight, ChevronDown, Settings2, AlertTriangle, Clock } from "lucide-react";
+import { Boxes, Package, Truck, CheckCircle2, Users, ChevronRight, ChevronDown, Settings2, AlertTriangle, Clock, Search } from "lucide-react";
 import { Link, useNavigate } from "react-router-dom";
 
 const STAT_CARDS = [
@@ -19,6 +19,7 @@ export default function Dashboard() {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [expandedSku, setExpandedSku] = useState(null);
+  const [skuQuery, setSkuQuery] = useState("");
 
   useEffect(() => {
     api.get("/dashboard/summary").then((r) => setData(r.data)).finally(() => setLoading(false));
@@ -130,18 +131,57 @@ export default function Dashboard() {
       {/* Item-wise pending totals (strict SKU view) */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-4">
         <div className="lg:col-span-7 bg-white border border-slate-200 rounded-sm">
-          <div className="px-5 py-4 border-b border-slate-200 flex items-center justify-between">
-            <div>
-              <div className="text-[10px] uppercase tracking-[0.15em] text-slate-500 font-bold">{t("dashboard.itemwiseOverline")}</div>
-              <h3 className="font-heading text-lg font-bold text-slate-900">{t("dashboard.itemwiseTitle")}</h3>
+          <div className="px-5 py-4 border-b border-slate-200">
+            <div className="flex items-center justify-between gap-3 flex-wrap">
+              <div>
+                <div className="text-[10px] uppercase tracking-[0.15em] text-slate-500 font-bold">{t("dashboard.itemwiseOverline")}</div>
+                <h3 className="font-heading text-lg font-bold text-slate-900">{t("dashboard.itemwiseTitle")}</h3>
+              </div>
+              <span className="text-xs text-slate-400">{t("dashboard.itemwiseHint")}</span>
             </div>
-            <span className="text-xs text-slate-400">{t("dashboard.itemwiseHint")}</span>
+            <div className="relative mt-3">
+              <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+              <input
+                type="text"
+                value={skuQuery}
+                onChange={(e) => setSkuQuery(e.target.value)}
+                data-testid="sku-search-input"
+                placeholder={t("dashboard.itemwiseSearchPlaceholder")}
+                className="w-full h-10 pl-9 pr-9 text-sm rounded-sm border border-slate-300 bg-slate-50 focus:bg-white focus:border-[#E65100] focus:ring-1 focus:ring-[#E65100] outline-none transition-colors"
+              />
+              {skuQuery && (
+                <button
+                  type="button"
+                  onClick={() => setSkuQuery("")}
+                  data-testid="sku-search-clear"
+                  className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-700 text-lg leading-none px-1"
+                  aria-label="Clear search"
+                >
+                  ×
+                </button>
+              )}
+            </div>
           </div>
           <div className="divide-y divide-slate-100 max-h-[460px] overflow-auto">
-            {(data.item_totals || data.product_totals || []).length === 0 && (
+            {(() => {
+              const allItems = data.item_totals || data.product_totals || [];
+              const q = skuQuery.trim().toLowerCase();
+              const items = q
+                ? allItems.filter((p) =>
+                    `${p.item_name || ""} ${p.product_name || ""}`.toLowerCase().includes(q)
+                  )
+                : allItems;
+              return (
+                <>
+            {allItems.length === 0 && (
               <div className="px-5 py-8 text-center text-slate-400 text-sm">{t("dashboard.noPendingOrders")}</div>
             )}
-            {(data.item_totals || data.product_totals || []).map((p) => {
+            {allItems.length > 0 && items.length === 0 && (
+              <div className="px-5 py-8 text-center text-slate-400 text-sm" data-testid="sku-search-empty">
+                {t("dashboard.itemwiseNoMatch", { query: skuQuery })}
+              </div>
+            )}
+            {items.map((p) => {
               const key = p.item_id || p.item_name || p.product_name;
               const isOpen = expandedSku === key;
               const breakdown = p.breakdown || [];
@@ -229,6 +269,9 @@ export default function Dashboard() {
                 </div>
               );
             })}
+                </>
+              );
+            })()}
           </div>
         </div>
 

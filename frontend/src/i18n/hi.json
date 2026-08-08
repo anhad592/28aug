@@ -103,6 +103,8 @@
     "itemwiseOverline": "लंबित — आइटम-वार",
     "itemwiseTitle": "ग्रैंड टोटल आवश्यक मात्रा (SKU अनुसार)",
     "itemwiseHint": "सभी लंबित ऑर्डर का योग",
+    "itemwiseSearchPlaceholder": "नाम से आइटम खोजें…",
+    "itemwiseNoMatch": "\"{{query}}\" से मेल खाने वाला कोई आइटम नहीं।",
     "fromOrders_one": "{{count}} ऑर्डर से",
     "fromOrders_other": "{{count}} ऑर्डर से",
     "breakdownTitle": "ऑर्डर-वार विवरण",
