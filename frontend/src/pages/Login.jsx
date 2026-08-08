@@ -260,29 +260,6 @@ export default function Login() {
               </form>
             )}
 
-            {!otpStep && (
-            <div className="mt-6 grid grid-cols-2 gap-2">
-              <Button
-                variant="outline"
-                onClick={() => quickFill("admin")}
-                disabled={busy || verifying}
-                data-testid="login-quickfill-admin"
-                className="rounded-sm h-10 text-xs border-slate-300 hover:bg-slate-50"
-              >
-                <Wrench className="w-3.5 h-3.5 mr-1.5" /> {t("login.demoAdmin")}
-              </Button>
-              <Button
-                variant="outline"
-                onClick={() => quickFill("user")}
-                disabled={busy || verifying}
-                data-testid="login-quickfill-user"
-                className="rounded-sm h-10 text-xs border-slate-300 hover:bg-slate-50"
-              >
-                <Wrench className="w-3.5 h-3.5 mr-1.5" /> {t("login.demoUser")}
-              </Button>
-            </div>
-            )}
-
             {!otpStep && caps && !(caps.camera && caps.gps) && (
               <div
                 className="mt-4 text-[11px] text-slate-500 flex items-start gap-1.5"
