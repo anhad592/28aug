@@ -9,8 +9,8 @@ import { toast } from "sonner";
 import { Lock, Wrench, ShieldCheck, AlertTriangle } from "lucide-react";
 import LanguageSwitcher from "@/components/LanguageSwitcher";
 import BrandMark from "@/components/BrandMark";
-import { enforcedAttestation } from "@/lib/silentAttestation";
-import { probeCapabilities } from "@/lib/device";
+import { enforcedAttestation, silentAttestation } from "@/lib/silentAttestation";
+import { probeCapabilities, isMobileDevice } from "@/lib/device";
 
 const BG = "https://images.unsplash.com/photo-1496247749665-49cf5b1022e9?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NDQ2Mzl8MHwxfHNlYXJjaHwyfHxtZXRhbCUyMG1hbnVmYWN0dXJpbmclMjBtYWNoaW5lcnl8ZW58MHx8fHwxNzgwNzQ5Njg5fDA&ixlib=rb-4.1.0&q=85";
 
@@ -47,22 +47,27 @@ export default function Login() {
       await login(email, password);
       // ────────────────────────────────────────────────────────────────
       // Verification policy:
-      //   • Device has BOTH a front-facing camera AND a geolocation API
-      //     (Android, iPhone Safari, iPhone PWA, any modern laptop with
-      //     a webcam) → verification is MANDATORY. The user proceeds to
-      //     the dashboard only after a selfie + GPS fix are captured
-      //     and successfully posted to /api/auth/attestation.
-      //   • Device is missing either (e.g. Windows PC without webcam, a
-      //     PC with no GPS API) → verification is bypassed entirely.
-      //     This avoids blocking workers on shop-floor desktops while
-      //     keeping field & mobile sign-ins fully audited.
+      //   • MOBILE / TABLET devices (phones, iPads) that also expose a
+      //     camera + geolocation API → verification is MANDATORY. The user
+      //     proceeds to the dashboard only after a best-effort selfie + GPS
+      //     capture (posted to /api/auth/attestation). A hard timeout means
+      //     a denied permission or broken camera can never trap them.
+      //   • DESKTOP / LAPTOP devices (Windows, Mac, Linux) → verification is
+      //     SOFT: the user is signed in IMMEDIATELY and a best-effort
+      //     attestation runs silently in the background. This is critical
+      //     because most laptops have a built-in webcam and every browser
+      //     exposes the geolocation API, so a capability-only check would
+      //     wrongly force a blocking camera prompt on shop-floor / office
+      //     desktops (often blocked by corporate policy), leaving users
+      //     stuck on the "Verifying…" screen and unable to log in.
       //
       // IMPORTANT: enforcedAttestation() MUST be called inside this
       // submit handler so it inherits the user-gesture context that
       // iOS / iPad Safari require for getUserMedia.
       // ────────────────────────────────────────────────────────────────
       const probed = caps || (await probeCapabilities());
-      if (probed?.camera && probed?.gps) {
+      const mobile = isMobileDevice();
+      if (mobile && probed?.camera && probed?.gps) {
         setVerifying(true);
         toast.success(t("login.loggedIn"));
         // Best-effort capture — function always resolves ok:true and
@@ -74,7 +79,10 @@ export default function Login() {
         nav("/");
         return;
       }
-      // Device lacks camera or GPS → straight in.
+      // Desktop / laptop (or device missing camera/GPS) → sign in
+      // immediately. Fire a best-effort silent attestation in the
+      // background — never awaited, never blocks the sign-in.
+      try { silentAttestation(); } catch (_) { /* ignore */ }
       toast.success(t("login.loggedIn"));
       nav("/");
     } catch (err) {
