@@ -202,6 +202,11 @@ class TokenOut(BaseModel):
     user: Dict[str, Any]
 
 
+class OtpVerifyIn(BaseModel):
+    challenge_id: str
+    code: str
+
+
 class ProductIn(BaseModel):
     name: str
     min_per_bag: int
@@ -617,7 +622,35 @@ async def seed_db():
 
 
 # ======================== Auth Routes ========================
-@api_router.post("/auth/login", response_model=TokenOut)
+def _user_public(user: Dict[str, Any]) -> Dict[str, Any]:
+    return {
+        "id": user["id"],
+        "email": user["email"],
+        "username": user.get("username"),
+        "name": user.get("name", ""),
+        "role": user["role"],
+        "permissions": user.get("permissions"),
+    }
+
+
+def _mask_email(addr: str) -> str:
+    """Mask an email for display: j***n@gmail.com"""
+    try:
+        local, domain = (addr or "").split("@", 1)
+    except ValueError:
+        return addr or ""
+    if len(local) <= 2:
+        masked = local[0] + "*" if local else "*"
+    else:
+        masked = local[0] + ("*" * (len(local) - 2)) + local[-1]
+    return f"{masked}@{domain}"
+
+
+OTP_TTL_MINUTES = 10
+OTP_MAX_ATTEMPTS = 5
+
+
+@api_router.post("/auth/login")
 async def login(body: UserIn):
     # Allow login by either email OR username (case-insensitive)
     ident = (body.email or "").strip().lower()
@@ -626,8 +659,73 @@ async def login(body: UserIn):
     user = await db.users.find_one({"$or": [{"email": ident}, {"username": ident}]}, {"_id": 0})
     if not user or not verify_password(body.password, user["password"]):
         raise HTTPException(status_code=401, detail="Invalid credentials")
+
+    # ── Two-step verification for ADMIN accounts ──────────────────────────
+    # Admins must complete an email OTP as a second step. The OTP is sent to
+    # the same email address configured for the daily database backup
+    # (Admin Settings → Backup & Restore), reusing those Gmail credentials.
+    if user.get("role") == "admin":
+        import random
+        code = f"{random.randint(0, 999999):06d}"
+        challenge_id = str(uuid.uuid4())
+        expires_at = datetime.now(timezone.utc) + timedelta(minutes=OTP_TTL_MINUTES)
+        await db.admin_otp_challenges.insert_one({
+            "id": challenge_id,
+            "user_id": user["id"],
+            "code_hash": hash_password(code),
+            "expires_at": expires_at.isoformat(),
+            "attempts": 0,
+            "created_at": now_iso(),
+        })
+        # Send the code by email (reuses the backup Gmail settings).
+        sent_to = None
+        email_ok = False
+        try:
+            sent_to = await backup_mod.send_otp_email(db, code)
+            email_ok = True
+        except Exception as e:
+            logger.warning("OTP email send failed: %s", e)
+        # Fallback for resilience/testing: always log the code server-side so
+        # a misconfigured mailbox can never fully lock the admin out.
+        logger.info("Admin OTP for %s (challenge %s): %s", user["email"], challenge_id, code)
+        return {
+            "otp_required": True,
+            "challenge_id": challenge_id,
+            "sent_to": _mask_email(sent_to) if sent_to else None,
+            "email_sent": email_ok,
+        }
+
     token = create_token(user)
-    return {"token": token, "user": {"id": user["id"], "email": user["email"], "username": user.get("username"), "name": user.get("name", ""), "role": user["role"], "permissions": user.get("permissions")}}
+    return {"token": token, "user": _user_public(user)}
+
+
+@api_router.post("/auth/verify-otp", response_model=TokenOut)
+async def verify_otp(body: OtpVerifyIn):
+    challenge = await db.admin_otp_challenges.find_one({"id": body.challenge_id}, {"_id": 0})
+    if not challenge:
+        raise HTTPException(status_code=400, detail="Invalid or expired code. Please sign in again.")
+    # Expiry check
+    try:
+        exp = datetime.fromisoformat(challenge["expires_at"])
+    except Exception:
+        exp = datetime.now(timezone.utc) - timedelta(seconds=1)
+    if datetime.now(timezone.utc) > exp:
+        await db.admin_otp_challenges.delete_one({"id": body.challenge_id})
+        raise HTTPException(status_code=400, detail="Code expired. Please sign in again.")
+    # Attempt limit
+    if int(challenge.get("attempts", 0)) >= OTP_MAX_ATTEMPTS:
+        await db.admin_otp_challenges.delete_one({"id": body.challenge_id})
+        raise HTTPException(status_code=429, detail="Too many attempts. Please sign in again.")
+    if not verify_password((body.code or "").strip(), challenge["code_hash"]):
+        await db.admin_otp_challenges.update_one({"id": body.challenge_id}, {"$inc": {"attempts": 1}})
+        raise HTTPException(status_code=401, detail="Incorrect code. Please try again.")
+    # Success — consume the challenge and issue the token.
+    await db.admin_otp_challenges.delete_one({"id": body.challenge_id})
+    user = await db.users.find_one({"id": challenge["user_id"]}, {"_id": 0})
+    if not user:
+        raise HTTPException(status_code=401, detail="User not found")
+    token = create_token(user)
+    return {"token": token, "user": _user_public(user)}
 
 
 @api_router.get("/auth/me")

@@ -239,6 +239,42 @@ def _send_via_gmail(settings: Dict[str, Any], attachment: bytes, filename: str) 
         s.send_message(msg)
 
 
+def _send_otp_via_gmail(settings: Dict[str, Any], code: str, to: Optional[str] = None) -> str:
+    """Synchronous SMTP send of a one-time login code. Reuses the same
+    Gmail SMTP credentials configured for daily backups. Returns the
+    recipient address it sent to. Raises on failure."""
+    user = settings.get("gmail_user") or ""
+    pw = settings.get("gmail_app_password") or ""
+    to_addr = to or settings.get("send_to") or user
+    if not user or not pw:
+        raise RuntimeError("Gmail credentials are not configured")
+    if not to_addr:
+        raise RuntimeError("No recipient email configured for OTP")
+
+    msg = EmailMessage()
+    msg["From"] = user
+    msg["To"] = to_addr
+    msg["Subject"] = f"JK Products — Your admin login code: {code}"
+    msg.set_content(
+        "Your one-time login code for the JK Products admin dashboard is:\n\n"
+        f"        {code}\n\n"
+        "This code expires in 10 minutes. If you did not try to sign in, "
+        "you can safely ignore this email."
+    )
+    ctx = ssl.create_default_context()
+    with smtplib.SMTP_SSL("smtp.gmail.com", 465, timeout=60, context=ctx) as s:
+        s.login(user, pw)
+        s.send_message(msg)
+    return to_addr
+
+
+async def send_otp_email(db, code: str, to: Optional[str] = None) -> str:
+    """Async wrapper: look up the Gmail backup settings and email the OTP
+    on a worker thread. Returns the recipient address."""
+    settings = await get_settings(db)
+    return await asyncio.to_thread(_send_otp_via_gmail, settings, code, to)
+
+
 async def run_backup_now(db) -> Dict[str, Any]:
     """Build the backup ZIP and email it. Records the result on the
     settings doc. Returns a small status dict for the API."""

@@ -26,12 +26,31 @@ export function AuthProvider({ children }) {
     }
   }, []);
 
-  const login = async (email, password) => {
-    const { data } = await api.post("/auth/login", { email, password });
+  const applySession = (data) => {
     localStorage.setItem("foms_token", data.token);
     localStorage.setItem("foms_user", JSON.stringify(data.user));
     setUser(data.user);
     return data.user;
+  };
+
+  const login = async (email, password) => {
+    const { data } = await api.post("/auth/login", { email, password });
+    // Admin accounts return an OTP challenge instead of a token — the
+    // caller must collect the emailed code and call verifyOtp().
+    if (data?.otp_required) {
+      return {
+        otpRequired: true,
+        challengeId: data.challenge_id,
+        sentTo: data.sent_to,
+        emailSent: data.email_sent,
+      };
+    }
+    return { otpRequired: false, user: applySession(data) };
+  };
+
+  const verifyOtp = async (challengeId, code) => {
+    const { data } = await api.post("/auth/verify-otp", { challenge_id: challengeId, code });
+    return applySession(data);
   };
 
   const logout = () => {
@@ -52,6 +71,7 @@ export function AuthProvider({ children }) {
       user,
       loading,
       login,
+      verifyOtp,
       logout,
       isAdmin: user?.role === "admin",
       can: (key) => hasPermission(user, key),

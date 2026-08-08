@@ -1,374 +1,344 @@
 #!/usr/bin/env python3
 """
-Test: Edit items → Save price change persists on Dispatch Report
-Bug fix verification for JK Products Factory Order Management
+Backend test for Admin Email-OTP Two-Step Login Flow
+Tests the Factory Order Management System's admin authentication
 """
-
 import requests
-import json
-from datetime import datetime, timedelta, timezone
-from typing import Optional, Dict, Any
+import re
+import time
 
 # Base URL from frontend/.env
-BASE_URL = "https://summer-deploy.preview.emergentagent.com/api"
+BASE_URL = "https://dev-clone-7.preview.emergentagent.com/api"
 
-# Test credentials
-USERNAME = "admin"
-PASSWORD = "admin123"
+# Test credentials (from review request)
+ADMIN_EMAIL = "admin"
+ADMIN_PASSWORD = "admin123"
+USER_EMAIL = "user"
+USER_PASSWORD = "user123"
 
-# Global token storage
-TOKEN = None
+def print_section(title):
+    print(f"\n{'='*70}")
+    print(f"  {title}")
+    print(f"{'='*70}")
 
-def login() -> str:
-    """Login and return JWT token"""
-    global TOKEN
-    print("\n=== Step 0: Login ===")
-    url = f"{BASE_URL}/auth/login"
-    payload = {"email": USERNAME, "password": PASSWORD}
-    
-    response = requests.post(url, json=payload)
-    print(f"Login status: {response.status_code}")
-    
-    if response.status_code != 200:
-        print(f"Login failed: {response.text}")
-        raise Exception(f"Login failed with status {response.status_code}")
-    
-    # Try different token key names
-    data = response.json() if response.headers.get('content-type', '').startswith('application/json') else {}
-    
-    # Handle plain string response
-    if isinstance(data, str):
-        TOKEN = data
-        print(f"Token obtained (plain string): {TOKEN[:50]}...")
-        return TOKEN
-    
-    # Try different keys
-    for key in ['token', 'access_token', 'foms_token']:
-        if key in data:
-            TOKEN = data[key]
-            print(f"Token obtained (key={key}): {TOKEN[:50]}...")
-            return TOKEN
-    
-    print(f"Response data: {data}")
-    raise Exception("No token found in login response")
+def print_result(test_name, passed, details=""):
+    status = "✅ PASS" if passed else "❌ FAIL"
+    print(f"\n{status} - {test_name}")
+    if details:
+        print(f"  Details: {details}")
 
-def get_headers() -> Dict[str, str]:
-    """Get authorization headers"""
-    if not TOKEN:
-        login()
-    return {
-        "Authorization": f"Bearer {TOKEN}",
-        "Content-Type": "application/json"
-    }
-
-def find_dispatch_with_items() -> tuple[str, str, str, float, str]:
-    """
-    Walk back day-by-day up to 60 days to find a dispatch with items.
-    Returns: (date_str, dispatch_id, item_id, original_net_price, report_line_net)
-    """
-    print("\n=== Step 1: Find dispatch with items ===")
-    
-    # IST timezone
-    IST = timezone(timedelta(hours=5, minutes=30))
-    today_ist = datetime.now(IST).date()
-    
-    for days_back in range(60):
-        target_date = today_ist - timedelta(days=days_back)
-        date_str = target_date.isoformat()
+def read_otp_from_logs(challenge_id):
+    """Read the OTP code from backend logs for the given challenge_id"""
+    try:
+        # Read backend.out.log
+        with open('/var/log/supervisor/backend.out.log', 'r') as f:
+            lines = f.readlines()
         
-        url = f"{BASE_URL}/reports/daily-dispatch?date={date_str}"
-        response = requests.get(url, headers=get_headers())
+        # Search for the OTP log line matching the challenge_id
+        # Format: "Admin OTP for admin@factory.com (challenge <id>): <6-digit-code>"
+        pattern = rf"Admin OTP for .+ \(challenge {re.escape(challenge_id)}\): (\d{{6}})"
+        
+        for line in reversed(lines):  # Search from end (most recent)
+            match = re.search(pattern, line)
+            if match:
+                return match.group(1)
+        
+        # Also check backend.err.log
+        with open('/var/log/supervisor/backend.err.log', 'r') as f:
+            lines = f.readlines()
+        
+        for line in reversed(lines):
+            match = re.search(pattern, line)
+            if match:
+                return match.group(1)
+        
+        return None
+    except Exception as e:
+        print(f"  Error reading logs: {e}")
+        return None
+
+def test_1_admin_login_step1():
+    """Test 1: ADMIN login step 1 - should return OTP challenge"""
+    print_section("TEST 1: Admin Login Step 1 (OTP Challenge)")
+    
+    payload = {"email": ADMIN_EMAIL, "password": ADMIN_PASSWORD}
+    
+    try:
+        response = requests.post(f"{BASE_URL}/auth/login", json=payload, timeout=10)
+        
+        print(f"Status Code: {response.status_code}")
+        print(f"Response: {response.json()}")
         
         if response.status_code != 200:
-            print(f"  Date {date_str}: Failed with status {response.status_code}")
-            continue
+            print_result("Admin Login Step 1", False, f"Expected 200, got {response.status_code}")
+            return None
         
         data = response.json()
         
-        # Check if we have groups with dispatches with items
-        if not data.get('groups'):
-            print(f"  Date {date_str}: No groups")
-            continue
+        # Check required fields
+        checks = [
+            ("otp_required" in data and data["otp_required"] == True, "otp_required is True"),
+            ("challenge_id" in data and data["challenge_id"], "challenge_id present and non-empty"),
+            ("sent_to" in data, "sent_to field present"),
+            ("token" not in data, "NO token field (as expected)"),
+        ]
         
-        for group in data['groups']:
-            if not group.get('dispatches'):
-                continue
-            
-            for dispatch in group['dispatches']:
-                items = dispatch.get('items', [])
-                if not items:
-                    continue
-                
-                # Find first item with positive quantity
-                for item in items:
-                    qty = int(item.get('quantity', 0))
-                    if qty > 0:
-                        did = dispatch['id']
-                        iid = item['item_id']
-                        original_net = float(item.get('net_unit_price', 0))
-                        
-                        # Find corresponding report line
-                        report_line_net = None
-                        for line in group.get('lines', []):
-                            if line.get('item_id') == iid and line.get('dispatch_id') == did:
-                                report_line_net = float(line.get('net_unit_price', 0))
-                                break
-                        
-                        print(f"✓ Found dispatch on {date_str}")
-                        print(f"  Dispatch ID: {did}")
-                        print(f"  Item ID: {iid}")
-                        print(f"  Item Name: {item.get('item_name', 'N/A')}")
-                        print(f"  Quantity: {qty}")
-                        print(f"  Original net_unit_price (dispatch item): ₹{original_net:.2f}")
-                        print(f"  Report line net_unit_price: ₹{report_line_net:.2f}" if report_line_net is not None else "  Report line: NOT FOUND")
-                        
-                        # Verify they match (within ₹0.02)
-                        if report_line_net is not None:
-                            diff = abs(original_net - report_line_net)
-                            if diff <= 0.02:
-                                print(f"  ✓ Prices match (diff: ₹{diff:.2f})")
-                            else:
-                                print(f"  ⚠ Prices differ by ₹{diff:.2f}")
-                        
-                        return date_str, did, iid, original_net, report_line_net
+        all_passed = all(check[0] for check in checks)
         
-        print(f"  Date {date_str}: No suitable items found")
-    
-    raise Exception("No dispatch with items found in the last 60 days")
-
-def patch_dispatch_price(did: str, new_price: float, existing_dispatch: Dict[str, Any]) -> Dict[str, Any]:
-    """
-    PATCH dispatch to change the first item's price
-    Returns the response JSON
-    """
-    print(f"\n=== Step 2: PATCH dispatch {did} with new price ₹{new_price:.2f} ===")
-    
-    # Clone existing items and modify first item's price
-    items = []
-    for idx, item in enumerate(existing_dispatch.get('items', [])):
-        item_data = {
-            "item_id": item.get('item_id'),
-            "item_name": item.get('item_name'),
-            "product_name": item.get('product_name', ''),
-            "variant": item.get('variant', ''),
-            "quantity": item.get('quantity'),
-            "unit_price": new_price if idx == 0 else item.get('unit_price', 0),
-            "net_unit_price": new_price if idx == 0 else item.get('net_unit_price', 0),
-            "discount_value": item.get('discount_value', 0),
-            "discount_type": item.get('discount_type', ''),
-            "description": item.get('description', '')
-        }
-        items.append(item_data)
-    
-    url = f"{BASE_URL}/dispatches/{did}"
-    payload = {"items": items}
-    
-    print(f"  Patching first item to ₹{new_price:.2f}")
-    response = requests.patch(url, json=payload, headers=get_headers())
-    
-    print(f"  Response status: {response.status_code}")
-    
-    if response.status_code != 200:
-        print(f"  ✗ PATCH failed: {response.text}")
-        raise Exception(f"PATCH failed with status {response.status_code}")
-    
-    data = response.json()
-    
-    # Verify price_override flag
-    if data.get('items') and len(data['items']) > 0:
-        first_item = data['items'][0]
-        price_override = first_item.get('price_override', False)
-        print(f"  price_override flag: {price_override}")
+        for check, desc in checks:
+            symbol = "✓" if check else "✗"
+            print(f"  {symbol} {desc}")
         
-        if price_override:
-            print(f"  ✓ price_override = true")
-        else:
-            print(f"  ✗ price_override = false (EXPECTED true)")
-    else:
-        print(f"  ⚠ No items in response")
-    
-    return data
-
-def verify_report_shows_override(date_str: str, did: str, iid: str, expected_price: float) -> tuple[bool, bool]:
-    """
-    Re-GET the daily-dispatch report and verify the override persists
-    Returns: (dispatch_item_correct, report_line_correct)
-    """
-    print(f"\n=== Step 3: Verify report shows override price ₹{expected_price:.2f} ===")
-    
-    url = f"{BASE_URL}/reports/daily-dispatch?date={date_str}"
-    response = requests.get(url, headers=get_headers())
-    
-    if response.status_code != 200:
-        print(f"  ✗ GET report failed: {response.status_code}")
-        return False, False
-    
-    data = response.json()
-    
-    dispatch_item_correct = False
-    report_line_correct = False
-    
-    # Find the dispatch and item
-    for group in data.get('groups', []):
-        for dispatch in group.get('dispatches', []):
-            if dispatch['id'] == did:
-                # Check dispatch items
-                for item in dispatch.get('items', []):
-                    if item.get('item_id') == iid:
-                        actual_net = float(item.get('net_unit_price', 0))
-                        print(f"  Dispatch item net_unit_price: ₹{actual_net:.2f}")
-                        
-                        if abs(actual_net - expected_price) <= 0.02:
-                            print(f"  ✓ Dispatch item shows override price")
-                            dispatch_item_correct = True
-                        else:
-                            print(f"  ✗ Dispatch item shows ₹{actual_net:.2f}, expected ₹{expected_price:.2f}")
-                        break
-                
-                # Check report lines
-                for line in group.get('lines', []):
-                    if line.get('item_id') == iid and line.get('dispatch_id') == did:
-                        actual_line_net = float(line.get('net_unit_price', 0))
-                        actual_line_value = float(line.get('line_value', 0))
-                        expected_line_value = expected_price * line.get('quantity', 0)
-                        
-                        print(f"  Report line net_unit_price: ₹{actual_line_net:.2f}")
-                        print(f"  Report line line_value: ₹{actual_line_value:.2f}")
-                        print(f"  Expected line_value: ₹{expected_line_value:.2f}")
-                        
-                        if abs(actual_line_net - expected_price) <= 0.02 and abs(actual_line_value - expected_line_value) <= 0.02:
-                            print(f"  ✓ Report line shows override price and correct line_value")
-                            report_line_correct = True
-                        else:
-                            print(f"  ✗ Report line incorrect")
-                        break
-                
-                return dispatch_item_correct, report_line_correct
-    
-    print(f"  ✗ Dispatch {did} not found in report")
-    return False, False
-
-def restore_original_price(did: str, original_price: float, existing_dispatch: Dict[str, Any]) -> None:
-    """
-    PATCH dispatch to restore original price
-    """
-    print(f"\n=== Step 4: Restore original price ₹{original_price:.2f} ===")
-    
-    # Clone existing items and restore first item's price
-    items = []
-    for idx, item in enumerate(existing_dispatch.get('items', [])):
-        item_data = {
-            "item_id": item.get('item_id'),
-            "item_name": item.get('item_name'),
-            "product_name": item.get('product_name', ''),
-            "variant": item.get('variant', ''),
-            "quantity": item.get('quantity'),
-            "unit_price": original_price if idx == 0 else item.get('unit_price', 0),
-            "net_unit_price": original_price if idx == 0 else item.get('net_unit_price', 0),
-            "discount_value": item.get('discount_value', 0),
-            "discount_type": item.get('discount_type', ''),
-            "description": item.get('description', '')
-        }
-        items.append(item_data)
-    
-    url = f"{BASE_URL}/dispatches/{did}"
-    payload = {"items": items}
-    
-    response = requests.patch(url, json=payload, headers=get_headers())
-    
-    print(f"  Response status: {response.status_code}")
-    
-    if response.status_code == 200:
-        print(f"  ✓ Original price restored")
-    else:
-        print(f"  ⚠ Restore failed: {response.text}")
-
-def get_dispatch_details(date_str: str, did: str) -> Optional[Dict[str, Any]]:
-    """Get full dispatch details from daily report"""
-    url = f"{BASE_URL}/reports/daily-dispatch?date={date_str}"
-    response = requests.get(url, headers=get_headers())
-    
-    if response.status_code != 200:
+        print_result("Admin Login Step 1", all_passed)
+        
+        if all_passed:
+            return data["challenge_id"]
         return None
-    
-    data = response.json()
-    for group in data.get('groups', []):
-        for dispatch in group.get('dispatches', []):
-            if dispatch['id'] == did:
-                return dispatch
-    
-    return None
-
-def main():
-    """Main test flow"""
-    print("=" * 80)
-    print("TEST: Edit items → Save price change persists on Dispatch Report")
-    print("=" * 80)
-    
-    try:
-        # Step 0: Login
-        login()
-        
-        # Step 1: Find a dispatch with items
-        date_str, did, iid, original_net, report_line_net = find_dispatch_with_items()
-        
-        # Get full dispatch details
-        existing_dispatch = get_dispatch_details(date_str, did)
-        if not existing_dispatch:
-            raise Exception("Could not retrieve dispatch details")
-        
-        # Step 2: PATCH with new price
-        new_price = 9999.99
-        patch_response = patch_dispatch_price(did, new_price, existing_dispatch)
-        
-        # Verify price_override in response
-        step2_pass = False
-        if patch_response.get('items') and len(patch_response['items']) > 0:
-            first_item = patch_response['items'][0]
-            if first_item.get('price_override') == True:
-                step2_pass = True
-        
-        # Step 3: Verify report shows override
-        dispatch_item_correct, report_line_correct = verify_report_shows_override(date_str, did, iid, new_price)
-        
-        # Step 4: Restore original price
-        restore_original_price(did, original_net, existing_dispatch)
-        
-        # Print results table
-        print("\n" + "=" * 80)
-        print("TEST RESULTS")
-        print("=" * 80)
-        print(f"Step 2 - PATCH response shows price_override=true: {'✓ PASS' if step2_pass else '✗ FAIL'}")
-        print(f"Step 3a - Dispatch item shows override price: {'✓ PASS' if dispatch_item_correct else '✗ FAIL'}")
-        print(f"Step 3b - Report line shows override price: {'✓ PASS' if report_line_correct else '✗ FAIL'}")
-        print("=" * 80)
-        
-        # Overall result
-        all_pass = step2_pass and dispatch_item_correct and report_line_correct
-        
-        if all_pass:
-            print("\n✓✓✓ ALL TESTS PASSED ✓✓✓")
-            print("The bug fix is working correctly:")
-            print("  - Price override flag is set on PATCH")
-            print("  - Enriched dispatch items respect the override")
-            print("  - Report lines respect the override")
-        else:
-            print("\n✗✗✗ SOME TESTS FAILED ✗✗✗")
-            if not step2_pass:
-                print("  - PATCH response does not set price_override=true")
-            if not dispatch_item_correct:
-                print("  - Dispatch items do not show override price")
-            if not report_line_correct:
-                print("  - Report lines do not show override price")
-        
-        return 0 if all_pass else 1
         
     except Exception as e:
-        print(f"\n✗✗✗ TEST FAILED WITH ERROR ✗✗✗")
-        print(f"Error: {e}")
-        import traceback
-        traceback.print_exc()
-        return 1
+        print_result("Admin Login Step 1", False, f"Exception: {e}")
+        return None
+
+def test_2_retrieve_otp(challenge_id):
+    """Test 2: Retrieve OTP code from backend logs"""
+    print_section("TEST 2: Retrieve OTP from Backend Logs")
+    
+    if not challenge_id:
+        print_result("Retrieve OTP", False, "No challenge_id from step 1")
+        return None
+    
+    print(f"Looking for OTP for challenge_id: {challenge_id}")
+    
+    otp_code = read_otp_from_logs(challenge_id)
+    
+    if otp_code:
+        print(f"Found OTP code: {otp_code}")
+        print_result("Retrieve OTP", True, f"Successfully extracted OTP: {otp_code}")
+        return otp_code
+    else:
+        print_result("Retrieve OTP", False, "Could not find OTP in logs")
+        return None
+
+def test_3_admin_verify_correct_code(challenge_id, otp_code):
+    """Test 3: ADMIN verify step 2 with correct code"""
+    print_section("TEST 3: Admin Verify OTP (Correct Code)")
+    
+    if not challenge_id or not otp_code:
+        print_result("Admin Verify (Correct)", False, "Missing challenge_id or OTP code")
+        return None
+    
+    payload = {"challenge_id": challenge_id, "code": otp_code}
+    
+    try:
+        response = requests.post(f"{BASE_URL}/auth/verify-otp", json=payload, timeout=10)
+        
+        print(f"Status Code: {response.status_code}")
+        print(f"Response: {response.json()}")
+        
+        if response.status_code != 200:
+            print_result("Admin Verify (Correct)", False, f"Expected 200, got {response.status_code}")
+            return None
+        
+        data = response.json()
+        
+        # Check required fields
+        checks = [
+            ("token" in data and data["token"], "token present and non-empty"),
+            ("user" in data, "user object present"),
+            (data.get("user", {}).get("role") == "admin", "user role is 'admin'"),
+        ]
+        
+        all_passed = all(check[0] for check in checks)
+        
+        for check, desc in checks:
+            symbol = "✓" if check else "✗"
+            print(f"  {symbol} {desc}")
+        
+        # Test the token with /auth/me
+        if "token" in data:
+            print("\n  Testing token with GET /auth/me...")
+            token = data["token"]
+            headers = {"Authorization": f"Bearer {token}"}
+            me_response = requests.get(f"{BASE_URL}/auth/me", headers=headers, timeout=10)
+            
+            print(f"  /auth/me Status: {me_response.status_code}")
+            
+            if me_response.status_code == 200:
+                me_data = me_response.json()
+                print(f"  /auth/me Response: {me_data}")
+                
+                if me_data.get("role") == "admin":
+                    print(f"  ✓ Token verified successfully, user is admin")
+                    all_passed = all_passed and True
+                else:
+                    print(f"  ✗ Token verified but role is not admin")
+                    all_passed = False
+            else:
+                print(f"  ✗ Token verification failed")
+                all_passed = False
+        
+        print_result("Admin Verify (Correct)", all_passed)
+        return data.get("token") if all_passed else None
+        
+    except Exception as e:
+        print_result("Admin Verify (Correct)", False, f"Exception: {e}")
+        return None
+
+def test_4_admin_verify_wrong_code():
+    """Test 4: ADMIN verify with WRONG code"""
+    print_section("TEST 4: Admin Verify OTP (Wrong Code)")
+    
+    # First, get a fresh challenge_id
+    print("Getting fresh challenge_id...")
+    payload = {"email": ADMIN_EMAIL, "password": ADMIN_PASSWORD}
+    
+    try:
+        response = requests.post(f"{BASE_URL}/auth/login", json=payload, timeout=10)
+        
+        if response.status_code != 200:
+            print_result("Admin Verify (Wrong Code)", False, "Could not get fresh challenge_id")
+            return
+        
+        data = response.json()
+        challenge_id = data.get("challenge_id")
+        
+        if not challenge_id:
+            print_result("Admin Verify (Wrong Code)", False, "No challenge_id in response")
+            return
+        
+        print(f"Got challenge_id: {challenge_id}")
+        
+        # Get the real OTP to ensure we use a different one
+        real_otp = read_otp_from_logs(challenge_id)
+        wrong_code = "000000"
+        
+        # Make sure wrong_code is different from real_otp
+        if real_otp == wrong_code:
+            wrong_code = "111111"
+        
+        print(f"Using wrong code: {wrong_code} (real code is: {real_otp})")
+        
+        # Try to verify with wrong code
+        verify_payload = {"challenge_id": challenge_id, "code": wrong_code}
+        verify_response = requests.post(f"{BASE_URL}/auth/verify-otp", json=verify_payload, timeout=10)
+        
+        print(f"Status Code: {verify_response.status_code}")
+        print(f"Response: {verify_response.json()}")
+        
+        # Should get 401 with error detail
+        checks = [
+            (verify_response.status_code == 401, "Status code is 401"),
+            ("detail" in verify_response.json(), "Error detail present"),
+            ("token" not in verify_response.json(), "NO token issued"),
+        ]
+        
+        all_passed = all(check[0] for check in checks)
+        
+        for check, desc in checks:
+            symbol = "✓" if check else "✗"
+            print(f"  {symbol} {desc}")
+        
+        print_result("Admin Verify (Wrong Code)", all_passed)
+        
+    except Exception as e:
+        print_result("Admin Verify (Wrong Code)", False, f"Exception: {e}")
+
+def test_5_non_admin_login():
+    """Test 5: NON-ADMIN login (should NOT require OTP)"""
+    print_section("TEST 5: Non-Admin Login (Direct Token)")
+    
+    payload = {"email": USER_EMAIL, "password": USER_PASSWORD}
+    
+    try:
+        response = requests.post(f"{BASE_URL}/auth/login", json=payload, timeout=10)
+        
+        print(f"Status Code: {response.status_code}")
+        print(f"Response: {response.json()}")
+        
+        if response.status_code != 200:
+            print_result("Non-Admin Login", False, f"Expected 200, got {response.status_code}")
+            return
+        
+        data = response.json()
+        
+        # Check required fields
+        checks = [
+            ("token" in data and data["token"], "token present and non-empty"),
+            ("user" in data, "user object present"),
+            (data.get("user", {}).get("role") == "user", "user role is 'user'"),
+            ("otp_required" not in data or not data.get("otp_required"), "NO otp_required field (or False)"),
+        ]
+        
+        all_passed = all(check[0] for check in checks)
+        
+        for check, desc in checks:
+            symbol = "✓" if check else "✗"
+            print(f"  {symbol} {desc}")
+        
+        print_result("Non-Admin Login", all_passed)
+        
+    except Exception as e:
+        print_result("Non-Admin Login", False, f"Exception: {e}")
+
+def test_6_invalid_challenge():
+    """Test 6: Invalid challenge_id"""
+    print_section("TEST 6: Invalid Challenge ID")
+    
+    payload = {"challenge_id": "does-not-exist", "code": "123456"}
+    
+    try:
+        response = requests.post(f"{BASE_URL}/auth/verify-otp", json=payload, timeout=10)
+        
+        print(f"Status Code: {response.status_code}")
+        print(f"Response: {response.json()}")
+        
+        # Should get 400 with error detail
+        checks = [
+            (response.status_code == 400, "Status code is 400"),
+            ("detail" in response.json(), "Error detail present"),
+        ]
+        
+        all_passed = all(check[0] for check in checks)
+        
+        for check, desc in checks:
+            symbol = "✓" if check else "✗"
+            print(f"  {symbol} {desc}")
+        
+        print_result("Invalid Challenge", all_passed)
+        
+    except Exception as e:
+        print_result("Invalid Challenge", False, f"Exception: {e}")
+
+def main():
+    print("\n" + "="*70)
+    print("  ADMIN EMAIL-OTP TWO-STEP LOGIN FLOW TEST")
+    print("  Factory Order Management System")
+    print("="*70)
+    print(f"\nBase URL: {BASE_URL}")
+    print(f"Admin Credentials: {ADMIN_EMAIL} / {ADMIN_PASSWORD}")
+    print(f"User Credentials: {USER_EMAIL} / {USER_PASSWORD}")
+    
+    # Test 1: Admin login step 1
+    challenge_id = test_1_admin_login_step1()
+    
+    # Test 2: Retrieve OTP from logs
+    otp_code = test_2_retrieve_otp(challenge_id) if challenge_id else None
+    
+    # Test 3: Admin verify with correct code
+    token = test_3_admin_verify_correct_code(challenge_id, otp_code) if challenge_id and otp_code else None
+    
+    # Test 4: Admin verify with wrong code
+    test_4_admin_verify_wrong_code()
+    
+    # Test 5: Non-admin login (direct token)
+    test_5_non_admin_login()
+    
+    # Test 6: Invalid challenge
+    test_6_invalid_challenge()
+    
+    print("\n" + "="*70)
+    print("  TEST SUITE COMPLETE")
+    print("="*70 + "\n")
 
 if __name__ == "__main__":
-    exit(main())
+    main()
