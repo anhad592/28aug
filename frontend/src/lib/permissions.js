@@ -3,7 +3,7 @@
 
 // Every nav key that can be granted / revoked.
 export const ALL_PERMISSION_KEYS = [
-  "dashboard", "orders", "dispatch", "purchaseCenter", "dispatchLedger", "vendorLedger", "dailyReport",
+  "dashboard", "orders", "newOrder", "dispatch", "purchaseCenter", "dispatchLedger", "vendorLedger", "dailyReport",
   "estimates",
   "customers", "products", "rawMaterials", "suppliers",
   "priceLists", "vendorPriceLists",
@@ -21,6 +21,7 @@ export const DEFAULT_USER_PERMISSIONS = [
 export const PERMISSION_LABELS = {
   dashboard: "Dashboard",
   orders: "Orders",
+  newOrder: "Add New Order",
   dispatch: "Dispatch Center",
   dispatchLedger: "Customer Ledger",
   vendorLedger: "Vendor Ledger",

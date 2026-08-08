@@ -293,10 +293,16 @@ class AdminUserCreate(BaseModel):
     password: str
     role: str = "user"  # "admin" or "user"
     username: Optional[str] = None  # admin-supplied short login id (defaults to email local-part)
+    otp_login: bool = False  # require email OTP as a second login step
+    permissions: Optional[List[str]] = None  # explicit nav-key allowlist (optional)
 
 
 class AdminPasswordReset(BaseModel):
     password: str
+
+
+class UserOtpUpdate(BaseModel):
+    otp_login: bool
 
 
 class UserPermissionsUpdate(BaseModel):
@@ -309,7 +315,7 @@ class UserPermissionsUpdate(BaseModel):
 # Every nav key that can be granted or revoked. Frontend mirrors this list
 # verbatim — keep the two in sync if you add a new page / sidebar entry.
 ALL_PERMISSION_KEYS: List[str] = [
-    "dashboard", "orders", "dispatch", "purchaseCenter", "dispatchLedger", "vendorLedger", "dailyReport",
+    "dashboard", "orders", "newOrder", "dispatch", "purchaseCenter", "dispatchLedger", "vendorLedger", "dailyReport",
     "estimates",
     "customers", "products", "rawMaterials", "suppliers",
     "priceLists", "vendorPriceLists",
@@ -552,12 +558,16 @@ async def seed_db():
     # Users
     if await db.users.count_documents({}) == 0:
         admin = {"id": str(uuid.uuid4()), "email": "admin@factory.com", "username": "admin", "name": "Admin",
-                 "password": hash_password("admin123"), "role": "admin", "created_at": now_iso()}
+                 "password": hash_password("admin123"), "role": "admin", "otp_login": True, "created_at": now_iso()}
         user = {"id": str(uuid.uuid4()), "email": "user@factory.com", "username": "user", "name": "Operator",
-                "password": hash_password("user123"), "role": "user", "created_at": now_iso()}
+                "password": hash_password("user123"), "role": "user", "otp_login": False, "created_at": now_iso()}
         await db.users.insert_many([admin, user])
         logger.info("Seeded default users")
     else:
+        # Backfill otp_login: admins default ON (preserves existing behaviour),
+        # non-admins default OFF. Only sets the field where it is missing.
+        await db.users.update_many({"otp_login": {"$exists": False}, "role": "admin"}, {"$set": {"otp_login": True}})
+        await db.users.update_many({"otp_login": {"$exists": False}, "role": {"$ne": "admin"}}, {"$set": {"otp_login": False}})
         # Backfill username for any pre-existing user (local-part of email, deduped)
         seen = set(u.get("username") for u in await db.users.find({"username": {"$exists": True}}, {"_id": 0, "username": 1}).to_list(1000) if u.get("username"))
         async for u in db.users.find({"username": {"$exists": False}}, {"_id": 0}):
@@ -660,11 +670,12 @@ async def login(body: UserIn):
     if not user or not verify_password(body.password, user["password"]):
         raise HTTPException(status_code=401, detail="Invalid credentials")
 
-    # ── Two-step verification for ADMIN accounts ──────────────────────────
-    # Admins must complete an email OTP as a second step. The OTP is sent to
-    # the same email address configured for the daily database backup
-    # (Admin Settings → Backup & Restore), reusing those Gmail credentials.
-    if user.get("role") == "admin":
+    # ── Two-step verification (email OTP) — per-user toggle ───────────────
+    # Admin can turn this ON/OFF for any user from Admin → Users. When ON,
+    # the user must complete an email OTP as a second step. The OTP is sent
+    # to the same email configured for the daily database backup, reusing
+    # those Gmail credentials.
+    if user.get("otp_login"):
         import random
         code = f"{random.randint(0, 999999):06d}"
         challenge_id = str(uuid.uuid4())
@@ -763,10 +774,30 @@ async def create_user(body: AdminUserCreate, admin=Depends(require_admin)):
         "name": body.name.strip() or email,
         "password": hash_password(body.password),
         "role": body.role,
+        "otp_login": bool(body.otp_login),
         "created_at": now_iso(),
     }
+    # Optional explicit permission allowlist (validated against the catalog).
+    if body.permissions is not None:
+        invalid = sorted({p for p in body.permissions if p not in ALL_PERMISSION_KEYS})
+        if invalid:
+            raise HTTPException(status_code=400, detail=f"Invalid permission keys: {invalid}")
+        doc["permissions"] = [k for k in ALL_PERMISSION_KEYS if k in set(body.permissions)]
     await db.users.insert_one(doc)
-    return {"id": doc["id"], "email": doc["email"], "username": doc["username"], "name": doc["name"], "role": doc["role"], "created_at": doc["created_at"]}
+    return {"id": doc["id"], "email": doc["email"], "username": doc["username"], "name": doc["name"], "role": doc["role"], "otp_login": doc["otp_login"], "permissions": doc.get("permissions"), "created_at": doc["created_at"]}
+
+
+@api_router.patch("/users/{uid}/otp")
+async def set_user_otp(uid: str, body: UserOtpUpdate, admin=Depends(require_admin)):
+    """Admin toggles email-OTP two-step login ON/OFF for any user."""
+    res = await db.users.update_one(
+        {"id": uid},
+        {"$set": {"otp_login": bool(body.otp_login), "updated_at": now_iso()}},
+    )
+    if res.matched_count == 0:
+        raise HTTPException(status_code=404, detail="User not found")
+    user = await db.users.find_one({"id": uid}, {"_id": 0, "password": 0})
+    return user
 
 
 @api_router.delete("/users/{uid}")

@@ -5,6 +5,7 @@ import { useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Switch } from "@/components/ui/switch";
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
@@ -23,7 +24,7 @@ export default function AdminUsers() {
   const [users, setUsers] = useState([]);
   const [loading, setLoading] = useState(true);
   const [showAdd, setShowAdd] = useState(false);
-  const [form, setForm] = useState({ email: "", name: "", password: "", role: "user", username: "" });
+  const [form, setForm] = useState({ email: "", name: "", password: "", role: "user", username: "", otp_login: false, newOrderOnly: false });
   const [resetTarget, setResetTarget] = useState(null);
   const [newPwd, setNewPwd] = useState("");
   // Permissions dialog
@@ -52,11 +53,31 @@ export default function AdminUsers() {
       toast.error(t("adminUsers.errors.passwordShort")); return;
     }
     try {
-      await api.post("/users", form);
+      const payload = {
+        email: form.email,
+        name: form.name,
+        password: form.password,
+        role: form.role,
+        username: form.username,
+        otp_login: form.otp_login,
+      };
+      // "Add New Order only" → restrict this user to just the New Order page.
+      if (form.role === "user" && form.newOrderOnly) {
+        payload.permissions = ["newOrder"];
+      }
+      await api.post("/users", payload);
       toast.success(t("adminUsers.added", { email: form.username || form.email }));
       setShowAdd(false);
-      setForm({ email: "", name: "", password: "", role: "user", username: "" });
+      setForm({ email: "", name: "", password: "", role: "user", username: "", otp_login: false, newOrderOnly: false });
       load();
+    } catch (e) { toast.error(e?.response?.data?.detail || t("common.failed")); }
+  };
+
+  const toggleOtp = async (u, next) => {
+    try {
+      await api.patch(`/users/${u.id}/otp`, { otp_login: next });
+      setUsers((prev) => prev.map((x) => (x.id === u.id ? { ...x, otp_login: next } : x)));
+      toast.success(next ? `OTP login enabled for ${u.username || u.email}` : `OTP login disabled for ${u.username || u.email}`);
     } catch (e) { toast.error(e?.response?.data?.detail || t("common.failed")); }
   };
 
@@ -191,6 +212,16 @@ export default function AdminUsers() {
                  </div>
                </div>
                <div className="flex items-center gap-2">
+                 <div className="hidden sm:flex items-center gap-2 mr-1 px-2 py-1 rounded-sm border border-slate-200 bg-slate-50"
+                      title="Require an email OTP as a second login step">
+                   <span className="text-[10px] uppercase tracking-wider font-bold text-slate-600">OTP login</span>
+                   <Switch
+                     checked={!!u.otp_login}
+                     onCheckedChange={(v) => toggleOtp(u, v)}
+                     data-testid={`otp-toggle-${u.id}`}
+                     className="data-[state=checked]:bg-[#E65100]"
+                   />
+                 </div>
                  {u.role !== "admin" && (
                    <Button size="sm" variant="outline"
                            data-testid={`manage-access-${u.id}`}
@@ -263,6 +294,34 @@ export default function AdminUsers() {
                 </SelectContent>
               </Select>
             </div>
+            {/* Email OTP two-step login toggle */}
+            <label className="flex items-center justify-between gap-3 border border-slate-200 rounded-sm px-3 py-2.5 cursor-pointer">
+              <span>
+                <span className="block text-xs font-bold uppercase text-slate-800">Require OTP on login</span>
+                <span className="block text-[11px] text-slate-500 mt-0.5">Emails a 6-digit code as a second step at sign-in.</span>
+              </span>
+              <Switch
+                checked={form.otp_login}
+                onCheckedChange={(v) => setForm((p) => ({ ...p, otp_login: v }))}
+                data-testid="add-user-otp"
+                className="data-[state=checked]:bg-[#E65100]"
+              />
+            </label>
+            {/* Restrict a normal user to only creating new orders */}
+            {form.role === "user" && (
+              <label className="flex items-center justify-between gap-3 border border-slate-200 rounded-sm px-3 py-2.5 cursor-pointer">
+                <span>
+                  <span className="block text-xs font-bold uppercase text-slate-800">Add New Order only</span>
+                  <span className="block text-[11px] text-slate-500 mt-0.5">This user can only open the New Order page — nothing else.</span>
+                </span>
+                <Switch
+                  checked={form.newOrderOnly}
+                  onCheckedChange={(v) => setForm((p) => ({ ...p, newOrderOnly: v }))}
+                  data-testid="add-user-neworder-only"
+                  className="data-[state=checked]:bg-[#E65100]"
+                />
+              </label>
+            )}
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setShowAdd(false)} className="rounded-sm">{t("common.cancel")}</Button>

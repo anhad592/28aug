@@ -27,20 +27,31 @@ import InstallPrompt from "@/components/InstallPrompt";
 import AIChatbot from "@/components/AIChatbot";
 import "@/App.css";
 
-function Protected({ children, adminOnly = false, permKey = null }) {
+function Protected({ children, adminOnly = false, permKey = null, permKeys = null }) {
   const { user, loading, isAdmin, can } = useAuth();
   const location = useLocation();
   if (loading) return <div className="p-10 text-center text-slate-500">Loading…</div>;
   if (!user) return <Navigate to="/login" replace state={{ from: location }} />;
   // Admins bypass everything.
   if (isAdmin) return children;
-  // An explicit grant via Manage Access (permKey present in the user's
-  // permissions) OVERRIDES the route's `adminOnly` default — otherwise the
-  // admin's grant has no visible effect for non-admin pages.
-  if (permKey && can(permKey)) return children;
+  // Accept access if ANY of the supplied keys is granted (permKeys) or the
+  // single permKey is granted. An explicit grant OVERRIDES the route's
+  // `adminOnly` default — otherwise the admin's grant has no visible effect.
+  const keys = permKeys || (permKey ? [permKey] : []);
+  if (keys.length && keys.some((k) => can(k))) return children;
   if (adminOnly) return <Navigate to="/" replace />;
-  if (permKey) return <Navigate to="/" replace />;
+  if (keys.length) return <Navigate to="/" replace />;
   return children;
+}
+
+// Landing route ("/"): admins and users with dashboard access see the
+// Dashboard. A restricted user (e.g. "Add New Order" only) is sent straight
+// to the page they can actually use so they never hit an empty dashboard.
+function Landing() {
+  const { isAdmin, can } = useAuth();
+  if (isAdmin || can("dashboard")) return <Dashboard />;
+  if (can("newOrder") || can("orders")) return <Navigate to="/orders/new" replace />;
+  return <Dashboard />;
 }
 
 export default function App() {
@@ -57,9 +68,9 @@ export default function App() {
               </Protected>
             }
           >
-            <Route index element={<Dashboard />} />
+            <Route index element={<Landing />} />
             <Route path="orders" element={<Protected permKey="orders"><Orders /></Protected>} />
-            <Route path="orders/new" element={<Protected permKey="orders"><NewOrder /></Protected>} />
+            <Route path="orders/new" element={<Protected permKeys={["orders", "newOrder"]}><NewOrder /></Protected>} />
             <Route path="customers" element={<Protected permKey="customers"><Customers /></Protected>} />
             <Route path="dispatch" element={<Protected permKey="dispatch"><Dispatch /></Protected>} />
             <Route path="purchase-center" element={<Protected adminOnly permKey="purchaseCenter"><PurchaseCenter /></Protected>} />

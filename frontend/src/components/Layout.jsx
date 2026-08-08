@@ -15,6 +15,7 @@ import VoiceAgent from "@/components/VoiceAgent";
 // Top-level nav items always visible in the main sidebar.
 const NAV = [
   { to: "/", key: "dashboard", icon: LayoutDashboard, end: true, testid: "nav-dashboard" },
+  { to: "/orders/new", key: "newOrder", icon: Plus, testid: "nav-new-order", showKeys: ["newOrder", "orders"] },
   { to: "/orders", key: "orders", icon: ClipboardList, testid: "nav-orders" },
   { to: "/dispatch", key: "dispatch", icon: PackageCheck, testid: "nav-dispatch" },
   { to: "/purchase-center", key: "purchaseCenter", icon: FileText, testid: "nav-purchase-center", adminOnly: true },
@@ -58,7 +59,7 @@ export default function Layout() {
   // The adminOnly flag still drops things for legacy users without a custom
   // permission set, because DEFAULT_USER_PERMISSIONS excludes those keys.
   const visibleSettings = SETTINGS_NAV.filter((n) => can(n.key));
-  const visibleNav = NAV.filter((n) => can(n.key));
+  const visibleNav = NAV.filter((n) => (n.showKeys ? n.showKeys.some((k) => can(k)) : can(n.key)));
 
   const renderNavLink = ({ to, key, icon: Icon, end, testid }, opts = {}) => (
     <NavLink
