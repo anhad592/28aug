@@ -1495,10 +1495,15 @@ export default function DispatchLedger() {
                         <span className="text-xs font-bold uppercase tracking-wider text-slate-700">Bill amount</span>
                         <span className="tabular-nums font-bold text-slate-900">₹{fmtINR(billAmount)}/-</span>
                       </div>
-                      <div className="px-3 py-2 flex items-center justify-between gap-6">
-                        <span className="text-xs font-bold uppercase tracking-wider text-slate-700">Cash amount</span>
-                        <span className="tabular-nums font-bold text-slate-900">₹{cashAmount.toLocaleString("en-IN")}/-</span>
-                      </div>
+                      {/* Hide "Cash amount" when it is nil — i.e. when the bill
+                          amount already equals (or covers) total + 18% GST, so
+                          there is no cash component to print. */}
+                      {cashAmount > 0 && (
+                        <div className="px-3 py-2 flex items-center justify-between gap-6">
+                          <span className="text-xs font-bold uppercase tracking-wider text-slate-700">Cash amount</span>
+                          <span className="tabular-nums font-bold text-slate-900">₹{cashAmount.toLocaleString("en-IN")}/-</span>
+                        </div>
+                      )}
                     </div>
                     {/* Private Mark (or Bill Number) + No. of Bags — hidden for Ludhiana parties */}
                     {!isLudhianaSlip && (
