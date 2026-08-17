@@ -968,7 +968,9 @@ function OffOrderDispatch() {
     setCustQuery(c.name);
     setShowSuggest(false);
     setTransport(c.transport_name || "");
-    setPvtMark(c.private_mark || "");
+    // Bill-number-mode parties: start with an EMPTY box for a manually-typed
+    // bill number (do NOT prefill the party's private mark).
+    setPvtMark(c.bill_number_mode ? "" : (c.private_mark || ""));
     // Pre-select the customer's saved price list, if any.
     setPriceListId(c.price_list_id || "");
   };
@@ -1017,7 +1019,9 @@ function OffOrderDispatch() {
     try {
       // If the operator edited the private mark for an existing customer,
       // persist it on the customer record so future dispatches inherit it.
-      if (customer.id && (pvtMark || "") !== (customer.private_mark || "")) {
+      // Skip this entirely for bill-number-mode parties — the typed value is
+      // a per-dispatch Bill Number, NOT a saved private mark.
+      if (!customer.bill_number_mode && customer.id && (pvtMark || "") !== (customer.private_mark || "")) {
         try {
           await api.patch(`/customers/${customer.id}`, { private_mark: pvtMark || "" });
         } catch (e) {
@@ -1032,6 +1036,9 @@ function OffOrderDispatch() {
         transport_name: transport || null,
         items,
         notes: notes || null,
+        // Bill-number-mode parties: send the manually-typed value as the
+        // dispatch's Bill Number instead of a private mark.
+        bill_number: customer.bill_number_mode ? (pvtMark || null) : null,
         dispatched_at: dispatchDate || null,
         bag_count: bagCount === "" || bagCount === null ? null : Math.max(0, parseInt(bagCount, 10) || 0),
         // Task 1 — Persist the operator's chosen price list on the
@@ -1198,15 +1205,22 @@ function OffOrderDispatch() {
             />
           </div>
           <div>
-            <label className="text-[10px] uppercase tracking-wider text-slate-500 font-bold block mb-1">
-              Customer pvt mark
+            <label className="text-[10px] uppercase tracking-wider font-bold block mb-1"
+                   style={{ color: customer?.bill_number_mode ? "#4338CA" : undefined }}>
+              {customer?.bill_number_mode ? "Bill Number" : "Customer pvt mark"}
             </label>
             <Input
               value={pvtMark}
               onChange={(e) => setPvtMark(e.target.value)}
-              placeholder={customer && !customer.walkIn ? "e.g. MRK-A · saved to party" : "Pick a party first"}
-              disabled={!customer || customer.walkIn}
-              className="h-10 rounded-sm disabled:bg-slate-50 disabled:cursor-not-allowed"
+              placeholder={
+                !customer
+                  ? "Pick a party first"
+                  : customer.bill_number_mode
+                    ? "Enter Bill Number Here"
+                    : (!customer.walkIn ? "e.g. MRK-A · saved to party" : "Optional mark")
+              }
+              disabled={!customer}
+              className={`h-10 rounded-sm disabled:bg-slate-50 disabled:cursor-not-allowed ${customer?.bill_number_mode ? "border-indigo-400 focus-visible:ring-indigo-400 bg-indigo-50/40" : ""}`}
               data-testid="off-order-pvt-mark"
             />
           </div>

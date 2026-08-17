@@ -1051,8 +1051,13 @@ export default function DispatchLedger() {
                     const hasGr = !!(raw.gr_number && String(raw.gr_number).trim());
                     const hasBags = Number(raw.bag_count || 0) > 0;
                     const hasPvt = !!(selectedParty?.private_mark && String(selectedParty.private_mark).trim());
+                    // Bill-number-mode parties satisfy the "mark" with a per-
+                    // dispatch Bill Number instead of a private mark.
+                    const billMode = !!selectedParty?.bill_number_mode;
+                    const hasBillNo = !!(raw.bill_number && String(raw.bill_number).trim());
+                    const hasMarkReq = billMode ? hasBillNo : hasPvt;
                     const hasBill = Number(raw.total_value || 0) > 0;
-                    const isComplete = isDispatch && hasGr && hasBags && hasPvt && hasBill;
+                    const isComplete = isDispatch && hasGr && hasBags && hasMarkReq && hasBill;
                     const isIncompleteDispatch = isDispatch && !isComplete;
                     const rowClass = isDispatch
                       ? isComplete
@@ -1096,7 +1101,7 @@ export default function DispatchLedger() {
                                   Missing: {[
                                     !hasGr && "GR#",
                                     !hasBags && "bags",
-                                    !hasPvt && "pvt mark",
+                                    !hasMarkReq && (billMode ? "bill number" : "pvt mark"),
                                     !hasBill && "bill amt",
                                   ].filter(Boolean).join(" · ")}
                                 </div>

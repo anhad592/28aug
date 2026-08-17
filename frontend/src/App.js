@@ -55,6 +55,27 @@ function Landing() {
 }
 
 export default function App() {
+  React.useEffect(() => {
+    // Global guard: stop the mouse wheel from changing the value of any
+    // <input type="number"> anywhere in the app. When a number field is
+    // focused and the pointer scrolls over it, the browser would otherwise
+    // increment/decrement the quantity. Blurring on wheel lets the page
+    // scroll normally and leaves the entered quantity untouched.
+    const onWheel = (e) => {
+      const el = document.activeElement;
+      if (
+        el &&
+        el.tagName === "INPUT" &&
+        el.type === "number" &&
+        (el === e.target || el.contains?.(e.target))
+      ) {
+        el.blur();
+      }
+    };
+    document.addEventListener("wheel", onWheel, { passive: true });
+    return () => document.removeEventListener("wheel", onWheel);
+  }, []);
+
   return (
     <AuthProvider>
       <BrowserRouter>

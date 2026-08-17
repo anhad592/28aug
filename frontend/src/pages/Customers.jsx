@@ -10,6 +10,9 @@ import { UserPlus, Phone, MapPin, Edit3, Save, X, Trash2, Truck, Tag, Upload, Do
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription,
 } from "@/components/ui/dialog";
+import {
+  Select, SelectTrigger, SelectValue, SelectContent, SelectItem,
+} from "@/components/ui/select";
 import { useAuth } from "@/lib/auth";
 import ConfirmDialog from "@/components/ConfirmDialog";
 import { useConfirm } from "@/lib/useConfirm";
@@ -29,11 +32,11 @@ export default function Customers() {
   const [loading, setLoading] = useState(true);
   const [q, setQ] = useState("");
   const [showAdd, setShowAdd] = useState(false);
-  const [form, setForm] = useState({ name: "", phone: "", address: "", city: "", location: "", transport_name: "", private_mark: "", price_list_id: "" });
+  const [form, setForm] = useState({ name: "", phone: "", address: "", city: "", location: "", transport_name: "", private_mark: "", bill_number_mode: false, price_list_id: "" });
   const [editing, setEditing] = useState(null);
   const [editPrefs, setEditPrefs] = useState({});
   const [editDetails, setEditDetails] = useState(null); // admin: name/phone/address edit
-  const [detailsForm, setDetailsForm] = useState({ name: "", phone: "", address: "", city: "", location: "", transport_name: "", private_mark: "", price_list_id: "" });
+  const [detailsForm, setDetailsForm] = useState({ name: "", phone: "", address: "", city: "", location: "", transport_name: "", private_mark: "", bill_number_mode: false, price_list_id: "" });
   // Bulk selection (admin)
   const [selectedIds, setSelectedIds] = useState(() => new Set());
   // Bulk import dialog
@@ -71,7 +74,7 @@ export default function Customers() {
         price_list_id: form.price_list_id || null,
       });
       toast.success(t("customers.added"));
-      setShowAdd(false); setForm({ name: "", phone: "", address: "", city: "", location: "", transport_name: "", private_mark: "", price_list_id: "" });
+      setShowAdd(false); setForm({ name: "", phone: "", address: "", city: "", location: "", transport_name: "", private_mark: "", bill_number_mode: false, price_list_id: "" });
       load();
     } catch (e) { toast.error(e?.response?.data?.detail || t("common.failed")); }
   };
@@ -100,6 +103,7 @@ export default function Customers() {
       location: c.location || "",
       transport_name: c.transport_name || "",
       private_mark: c.private_mark || "",
+      bill_number_mode: !!c.bill_number_mode,
       price_list_id: c.price_list_id || "",
     });
   };
@@ -430,11 +434,39 @@ export default function Customers() {
                      data-testid="cust-add-transport" className="h-11 rounded-sm mt-1" />
             </div>
             <div>
-              <Label className="text-xs font-bold uppercase">Private mark</Label>
-              <Input value={form.private_mark}
-                     onChange={(e) => setForm((p) => ({ ...p, private_mark: e.target.value }))}
-                     placeholder="e.g. JKM, RAM-NAGPUR (stencil mark on package)"
-                     data-testid="cust-add-private-mark" className="h-11 rounded-sm mt-1" />
+              <Label className="text-xs font-bold uppercase">Private mark / Bill Number</Label>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 mt-1">
+                <Input value={form.private_mark}
+                       disabled={form.bill_number_mode}
+                       onChange={(e) => {
+                         const v = e.target.value;
+                         if (/[a-zA-Z]/.test(v)) {
+                           // Contains letters → it's a Private Mark.
+                           setForm((p) => ({ ...p, private_mark: v, bill_number_mode: false }));
+                         } else if (/^\d+$/.test(v.trim())) {
+                           // Purely numeric → clear input & switch to Bill Number.
+                           setForm((p) => ({ ...p, private_mark: "", bill_number_mode: true }));
+                         } else {
+                           setForm((p) => ({ ...p, private_mark: v, bill_number_mode: v ? p.bill_number_mode : false }));
+                         }
+                       }}
+                       placeholder="Type mark (letters) — digits switch to Bill Number"
+                       data-testid="cust-add-private-mark"
+                       className="h-11 rounded-sm disabled:bg-slate-100 disabled:text-slate-400" />
+                <Select
+                  value={form.bill_number_mode ? "bill" : "none"}
+                  onValueChange={(v) => setForm((p) => ({ ...p, bill_number_mode: v === "bill", private_mark: v === "bill" ? "" : p.private_mark }))}
+                >
+                  <SelectTrigger data-testid="cust-add-billmode" className="h-11 rounded-sm">
+                    <SelectValue placeholder="Bill Number" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="none">— None —</SelectItem>
+                    <SelectItem value="bill">Bill Number</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <p className="text-[11px] text-slate-400 mt-1">Choose ONE: either a Private mark, or Bill Number mode (bill typed at dispatch).</p>
             </div>
             <div>
               <Label className="text-xs font-bold uppercase">Price list</Label>
@@ -549,11 +581,37 @@ export default function Customers() {
                      data-testid="cust-edit-transport" className="h-11 rounded-sm mt-1" />
             </div>
             <div>
-              <Label className="text-xs font-bold uppercase">Private mark</Label>
-              <Input value={detailsForm.private_mark}
-                     onChange={(e) => setDetailsForm((p) => ({ ...p, private_mark: e.target.value }))}
-                     placeholder="e.g. JKM, RAM-NAGPUR (stencil mark on package)"
-                     data-testid="cust-edit-private-mark" className="h-11 rounded-sm mt-1" />
+              <Label className="text-xs font-bold uppercase">Private mark / Bill Number</Label>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 mt-1">
+                <Input value={detailsForm.private_mark}
+                       disabled={detailsForm.bill_number_mode}
+                       onChange={(e) => {
+                         const v = e.target.value;
+                         if (/[a-zA-Z]/.test(v)) {
+                           setDetailsForm((p) => ({ ...p, private_mark: v, bill_number_mode: false }));
+                         } else if (/^\d+$/.test(v.trim())) {
+                           setDetailsForm((p) => ({ ...p, private_mark: "", bill_number_mode: true }));
+                         } else {
+                           setDetailsForm((p) => ({ ...p, private_mark: v, bill_number_mode: v ? p.bill_number_mode : false }));
+                         }
+                       }}
+                       placeholder="Type mark (letters) — digits switch to Bill Number"
+                       data-testid="cust-edit-private-mark"
+                       className="h-11 rounded-sm disabled:bg-slate-100 disabled:text-slate-400" />
+                <Select
+                  value={detailsForm.bill_number_mode ? "bill" : "none"}
+                  onValueChange={(v) => setDetailsForm((p) => ({ ...p, bill_number_mode: v === "bill", private_mark: v === "bill" ? "" : p.private_mark }))}
+                >
+                  <SelectTrigger data-testid="cust-edit-billmode" className="h-11 rounded-sm">
+                    <SelectValue placeholder="Bill Number" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="none">— None —</SelectItem>
+                    <SelectItem value="bill">Bill Number</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <p className="text-[11px] text-slate-400 mt-1">Choose ONE: either a Private mark, or Bill Number mode (bill typed at dispatch).</p>
             </div>
             <div>
               <Label className="text-xs font-bold uppercase">Price list</Label>

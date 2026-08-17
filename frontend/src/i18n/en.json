@@ -132,6 +132,7 @@
     "allStatus": "All Status",
     "noMatch": "No orders match your filters.",
     "delivery": "Delivery",
+    "dispatchedLabel": "Dispatched:",
     "confirmDeleteTitle": "Delete order?",
     "confirmDelete": "Delete this order?",
     "overdueBadge": "Overdue · {{days}}d",

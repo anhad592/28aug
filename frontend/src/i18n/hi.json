@@ -132,6 +132,7 @@
     "allStatus": "सभी स्थिति",
     "noMatch": "आपके फ़िल्टर से कोई ऑर्डर मेल नहीं खाता।",
     "delivery": "डिलीवरी",
+    "dispatchedLabel": "डिस्पैच किया:",
     "confirmDeleteTitle": "ऑर्डर हटाएँ?",
     "confirmDelete": "क्या यह ऑर्डर हटाना है?",
     "overdueBadge": "ओवरड्यू · {{days}} दिन",

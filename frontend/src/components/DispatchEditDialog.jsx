@@ -22,7 +22,7 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { toast } from "sonner";
-import { Plus, Trash2, Save, X, CalendarDays } from "lucide-react";
+import { Plus, Trash2, Save, X, CalendarDays, User } from "lucide-react";
 import ItemSearchInput from "@/components/ItemSearchInput";
 import DatePicker from "@/components/DatePicker";
 
@@ -69,6 +69,12 @@ export default function DispatchEditDialog({ open, onOpenChange, dispatch, custo
   const [saving, setSaving] = useState(false);
   const [confirmDeleteOpen, setConfirmDeleteOpen] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  // Customer reassignment (edit which party this slip belongs to)
+  const [custId, setCustId] = useState("");
+  const [custName, setCustName] = useState("");
+  const [custQuery, setCustQuery] = useState("");
+  const [custResults, setCustResults] = useState([]);
+  const [custOpen, setCustOpen] = useState(false);
 
   useEffect(() => {
     if (!open || !dispatch) return;
@@ -90,9 +96,33 @@ export default function DispatchEditDialog({ open, onOpenChange, dispatch, custo
     setBill(dispatch.total_value > 0 ? String(dispatch.total_value) : "");
     setBags(dispatch.bag_count > 0 ? String(dispatch.bag_count) : "");
     setDispatchDate(isoToDateInput(dispatch.dispatched_at || dispatch.created_at));
+    setCustId(dispatch.customer_id || "");
+    setCustName(dispatch.customer_name || "");
+    setCustQuery("");
+    setCustResults([]);
+    setCustOpen(false);
   }, [open, dispatch]);
 
   if (!dispatch) return null;
+
+  const searchCustomers = async (val) => {
+    setCustQuery(val);
+    const q = (val || "").trim();
+    if (!q) { setCustResults([]); setCustOpen(false); return; }
+    try {
+      const { data } = await api.get("/customers/search", { params: { q } });
+      setCustResults(data || []);
+      setCustOpen(true);
+    } catch (e) { setCustResults([]); }
+  };
+
+  const pickCustomer = (c) => {
+    setCustId(c.id);
+    setCustName(c.name);
+    setCustQuery("");
+    setCustResults([]);
+    setCustOpen(false);
+  };
 
   const updateItem = (idx, patch) =>
     setItems((arr) => arr.map((r, i) => (i === idx ? { ...r, ...patch } : r)));
@@ -134,6 +164,8 @@ export default function DispatchEditDialog({ open, onOpenChange, dispatch, custo
     const body = { items: cleanItems, gr_number: gr };
     if (bill !== "") body.total_value = Number(bill);
     if (bags !== "") body.bag_count = Math.max(0, parseInt(bags, 10) || 0);
+    // Reassign customer if it was changed in the picker.
+    if (custId && custId !== dispatch.customer_id) body.customer_id = custId;
     // Send the (possibly changed) dispatch date — backend normalises a
     // bare YYYY-MM-DD into noon-IST so the slip lands cleanly on that day.
     const originalDate = isoToDateInput(dispatch.dispatched_at || dispatch.created_at);
@@ -189,6 +221,60 @@ export default function DispatchEditDialog({ open, onOpenChange, dispatch, custo
         </DialogHeader>
 
         <div className="space-y-4 max-h-[60vh] overflow-y-auto pr-1">
+          {/* Customer (editable — reassigns the slip to another party) */}
+          <div className="relative">
+            <Label className="text-[10px] uppercase font-bold text-slate-500 flex items-center gap-1">
+              <User className="w-3 h-3 text-[#E65100]" />
+              Customer
+            </Label>
+            <div className="mt-0.5 flex items-center gap-2 flex-wrap">
+              <span
+                className="inline-flex items-center gap-1.5 px-2.5 h-9 rounded-sm border border-slate-300 bg-slate-50 text-sm font-bold text-slate-800"
+                data-testid="dispatch-edit-current-customer"
+              >
+                {custName || "—"}
+              </span>
+              <span className="text-[11px] text-slate-400">change to:</span>
+              <div className="relative flex-1 min-w-[180px]">
+                <Input
+                  value={custQuery}
+                  onChange={(e) => searchCustomers(e.target.value)}
+                  onFocus={() => { if (custResults.length) setCustOpen(true); }}
+                  placeholder="Search customer by name…"
+                  data-testid="dispatch-edit-customer-search"
+                  className="h-9 rounded-sm"
+                />
+                {custOpen && custResults.length > 0 && (
+                  <div
+                    className="absolute z-50 left-0 right-0 mt-1 max-h-56 overflow-y-auto bg-white border border-slate-200 rounded-sm shadow-lg"
+                    data-testid="dispatch-edit-customer-results"
+                  >
+                    {custResults.map((c) => {
+                      const loc = [c.city, c.location, c.address].map((x) => (x || "").trim()).find(Boolean) || "";
+                      return (
+                      <button
+                        key={c.id}
+                        type="button"
+                        onClick={() => pickCustomer(c)}
+                        data-testid={`dispatch-edit-customer-option-${c.id}`}
+                        className="w-full text-left px-3 py-2 text-sm hover:bg-orange-50 border-b border-slate-100 last:border-0"
+                      >
+                        <span className="font-bold text-slate-800">{c.name}</span>
+                        {loc ? <span className="text-slate-400 text-xs"> · {loc}</span> : null}
+                      </button>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            </div>
+            {custId && dispatch.customer_id && custId !== dispatch.customer_id && (
+              <div className="mt-1 text-[11px] text-[#E65100] font-bold" data-testid="dispatch-edit-customer-changed">
+                Will move this slip to {custName}.
+              </div>
+            )}
+          </div>
+
           {/* Date + GR + bags + bill */}
           <div className={`grid grid-cols-1 sm:grid-cols-2 ${isLudhiana ? "lg:grid-cols-2" : "lg:grid-cols-4"} gap-3`}>
             <div>

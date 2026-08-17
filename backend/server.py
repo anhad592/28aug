@@ -238,6 +238,7 @@ class CustomerIn(BaseModel):
     price_list_id: Optional[str] = None  # assigned price list (per-party pricing)
     transport_name: Optional[str] = ""   # transport company / vehicle name
     private_mark: Optional[str] = ""     # stenciled mark on packages for this party
+    bill_number_mode: Optional[bool] = False  # if True, this party uses a manually-typed Bill Number at dispatch instead of a Private Marka
     blocked_items: List[str] = []        # item_ids that must never be ordered/dispatched for this party
 
 
@@ -251,6 +252,7 @@ class CustomerUpdate(BaseModel):
     price_list_id: Optional[str] = None
     transport_name: Optional[str] = None
     private_mark: Optional[str] = None
+    bill_number_mode: Optional[bool] = None
     blocked_items: Optional[List[str]] = None
 
 
@@ -477,6 +479,9 @@ class OffOrderDispatchIn(BaseModel):
     # Optional backdate — see DispatchExecuteIn.dispatched_at for the
     # accepted formats and timezone behaviour.
     dispatched_at: Optional[str] = None
+    # Manually-typed Bill Number for parties configured in bill-number mode
+    # (used instead of a Private Marka). Stored on the dispatch record.
+    bill_number: Optional[str] = None
 
 
 # ---- Bulk customer admin ----
@@ -579,6 +584,32 @@ async def seed_db():
                 uname = f"{base}{i}"
             seen.add(uname)
             await db.users.update_one({"id": u["id"]}, {"$set": {"username": uname}})
+    # Special demo account "JK1" — sees an EMPTY system (blank_view) so the app
+    # can be shown/screenshared as if no data was ever entered. Real accounts
+    # are unaffected. Idempotent: created once, never overwrites a changed pwd.
+    if await db.users.count_documents({"username": "JK1"}) == 0:
+        await db.users.insert_one({
+            "id": str(uuid.uuid4()),
+            "email": "jk1@factory.com",
+            "username": "JK1",
+            "name": "JK1 (Demo)",
+            "password": hash_password("jk1123"),
+            "role": "admin",
+            "otp_login": False,
+            "blank_view": True,
+            "created_at": now_iso(),
+        })
+        logger.info("Seeded JK1 blank-view demo account")
+    # One-time backfill (idempotent): existing parties whose private_mark is
+    # PURELY NUMERIC are switched to Bill Number mode (mark cleared). Parties
+    # whose mark contains letters are left untouched. Runs every startup but
+    # only matches purely-numeric marks, so it self-heals across environments.
+    _num_migrated = await db.customers.update_many(
+        {"private_mark": {"$regex": r"^\s*\d+\s*$"}},
+        {"$set": {"bill_number_mode": True, "private_mark": ""}},
+    )
+    if getattr(_num_migrated, "modified_count", 0):
+        logger.info("Bill-number migration: converted %s numeric private marks", _num_migrated.modified_count)
     # Settings singleton — overdue order threshold (admin-configurable)
     if await db.settings.count_documents({"id": "global"}) == 0:
         await db.settings.insert_one({"id": "global", "overdue_days": 15, "edit_window_days": 3, "updated_at": now_iso()})
@@ -643,6 +674,13 @@ def _user_public(user: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+def is_blank_view(user: Optional[Dict[str, Any]]) -> bool:
+    """True for the special demo account (JK1) that must see an empty system
+    — no orders, dispatches or customers — as if nothing was ever entered.
+    The real accounts are unaffected and see all live data."""
+    return bool(user and user.get("blank_view"))
+
+
 def _mask_email(addr: str) -> str:
     """Mask an email for display: j***n@gmail.com"""
     try:
@@ -666,7 +704,9 @@ async def login(body: UserIn):
     ident = (body.email or "").strip().lower()
     if not ident:
         raise HTTPException(status_code=401, detail="Invalid credentials")
-    user = await db.users.find_one({"$or": [{"email": ident}, {"username": ident}]}, {"_id": 0})
+    raw_ident = (body.email or "").strip()
+    ci_username = {"username": {"$regex": f"^{re.escape(raw_ident)}$", "$options": "i"}}
+    user = await db.users.find_one({"$or": [{"email": ident}, {"username": ident}, ci_username]}, {"_id": 0})
     if not user or not verify_password(body.password, user["password"]):
         raise HTTPException(status_code=401, detail="Invalid credentials")
 
@@ -1203,12 +1243,16 @@ async def clear_item_bag_override(iid: str, user=Depends(require_admin)):
 # ======================== Customers ========================
 @api_router.get("/customers")
 async def list_customers(user=Depends(get_current_user)):
+    if is_blank_view(user):
+        return []
     items = await db.customers.find({}, {"_id": 0}).sort("name", 1).to_list(2000)
     return items
 
 
 @api_router.get("/customers/search")
 async def search_customers(q: str = "", user=Depends(get_current_user)):
+    if is_blank_view(user):
+        return []
     q = q.strip()
     if not q:
         return []
@@ -1249,6 +1293,18 @@ async def update_customer(cid: str, body: CustomerUpdate, user=Depends(get_curre
         update = {k: v for k, v in update.items() if k in allowed}
     if not update:
         raise HTTPException(status_code=400, detail="No fields to update")
+    # Enforce Bill-Number mode: a party configured for Bill Number must NEVER
+    # have a private mark auto-saved/reused. Whether the party is already in
+    # bill mode or is being switched into it now, any incoming private_mark is
+    # forced empty so the software always asks for a fresh Bill Number at
+    # dispatch (never silently remembers one).
+    existing = await db.customers.find_one({"id": cid}, {"_id": 0, "bill_number_mode": 1})
+    if not existing:
+        raise HTTPException(status_code=404, detail="Customer not found")
+    incoming_mode = update.get("bill_number_mode")
+    effective_mode = incoming_mode if incoming_mode is not None else bool(existing.get("bill_number_mode"))
+    if effective_mode and "private_mark" in update:
+        update["private_mark"] = ""
     res = await db.customers.update_one({"id": cid}, {"$set": update})
     if res.matched_count == 0:
         raise HTTPException(status_code=404, detail="Customer not found")
@@ -1633,8 +1689,18 @@ async def create_order(body: OrderIn, user=Depends(get_current_user)):
 
 @api_router.get("/orders")
 async def list_orders(status_filter: Optional[str] = None, user=Depends(get_current_user)):
+    if is_blank_view(user):
+        return []
     q = {}
-    if status_filter:
+    if status_filter == "Dispatched":
+        # "Dispatched" view must include PARTIALLY dispatched orders too —
+        # those keep status "Pending" (remainder still open) so they would
+        # otherwise never appear here, hiding the qty already shipped.
+        single_ids = await db.dispatches.distinct("order_id")
+        multi_ids = await db.dispatches.distinct("order_ids")
+        disp_ids = [i for i in set([*(single_ids or []), *(multi_ids or [])]) if i]
+        q = {"$or": [{"status": {"$in": ["Dispatched", "Cleared"]}}, {"id": {"$in": disp_ids}}]}
+    elif status_filter:
         q["status"] = status_filter
     items = await db.orders.find(q, {"_id": 0}).sort("created_at", -1).to_list(2000)
     # Annotate overdue flag + days_open for Pending orders, using admin-set threshold
@@ -1658,6 +1724,36 @@ async def list_orders(status_filter: Optional[str] = None, user=Depends(get_curr
                 "location": c.get("location") or "",
             }
 
+    # Dispatched-items summary — a fully dispatched order's `items` list is
+    # emptied (remaining pending = 0), so the list view would show nothing
+    # under a "Dispatched" order. Aggregate what was actually shipped from the
+    # dispatches collection so the UI can show "what was dispatched".
+    order_ids = [o["id"] for o in items]
+    disp_map: Dict[str, Dict[str, Dict[str, Any]]] = {}
+    if order_ids:
+        oid_set = set(order_ids)
+        async for d in db.dispatches.find(
+            {"$or": [{"order_id": {"$in": order_ids}}, {"order_ids": {"$in": order_ids}}]},
+            {"_id": 0, "order_id": 1, "order_ids": 1, "items": 1},
+        ):
+            targets = []
+            if d.get("order_id") in oid_set:
+                targets = [d["order_id"]]
+            else:
+                targets = [oid for oid in (d.get("order_ids") or []) if oid in oid_set]
+            for oid in targets:
+                bucket = disp_map.setdefault(oid, {})
+                for it in (d.get("items") or []):
+                    key = it.get("item_id") or it.get("item_name") or ""
+                    row = bucket.setdefault(key, {
+                        "item_id": it.get("item_id"),
+                        "item_name": it.get("item_name"),
+                        "product_name": it.get("product_name"),
+                        "variant": it.get("variant"),
+                        "quantity": 0,
+                    })
+                    row["quantity"] += int(it.get("quantity") or 0)
+
     for o in items:
         days_open = None
         ref = o.get("order_date") or o.get("created_at")
@@ -1674,6 +1770,7 @@ async def list_orders(status_filter: Optional[str] = None, user=Depends(get_curr
         loc = cust_loc.get(o.get("customer_id") or "", {})
         o["customer_city"] = loc.get("city", "")
         o["customer_location"] = loc.get("location", "")
+        o["dispatched_items"] = list(disp_map.get(o["id"], {}).values())
     return items
 
 
@@ -1738,6 +1835,22 @@ async def delete_order(oid: str, user=Depends(require_admin)):
 # ======================== Dashboard Summary ========================
 @api_router.get("/dashboard/summary")
 async def dashboard_summary(user=Depends(get_current_user)):
+    if is_blank_view(user):
+        return {
+            "stats": {
+                "total_orders": 0,
+                "pending_orders": 0,
+                "dispatched_orders": 0,
+                "cleared_orders": 0,
+                "customers": 0,
+                "products": 0,
+            },
+            "item_totals": [],
+            "product_totals": [],
+            "party_breakdown": [],
+            "overdue_customers": [],
+            "overdue_threshold_days": 15,
+        }
     pending = await db.orders.find({"status": "Pending"}, {"_id": 0}).to_list(5000)
 
     # Read overdue threshold (default 15) so the dashboard can rank overdue customers.
@@ -2394,6 +2507,8 @@ async def next_receipt_no() -> int:
 @api_router.get("/dispatches")
 async def list_dispatches(order_id: Optional[str] = None, customer_id: Optional[str] = None,
                           user=Depends(get_current_user)):
+    if is_blank_view(user):
+        return []
     q = {}
     if order_id:
         q["order_id"] = order_id
@@ -2416,6 +2531,8 @@ async def admin_dispatch_ledger(
     """Dispatch ledger — every dispatch (regular + off-order) with its GR
     number. Accessible to any authenticated user so it can live in the main
     interface (not buried under Admin Settings). Newest first."""
+    if is_blank_view(user):
+        return {"total": 0, "items": [], "grand_total_value": 0, "grand_total_pcs": 0}
     q: Dict[str, Any] = {}
     if start_date or end_date:
         IST = timezone(timedelta(hours=5, minutes=30))
@@ -2491,6 +2608,13 @@ class DispatchEdit(BaseModel):
     total_value: Optional[float] = None  # allow overriding bill amount (debit)
     bag_count: Optional[int] = None  # operator-entered number of bags shipped
     items: Optional[List[DispatchEditItem]] = None  # if provided, replaces line items
+    # Reassign this slip to a different customer. When set, the slip's
+    # customer_id + customer_name are updated; because the customer ledger /
+    # dispatch report are derived by customer_id, the slip moves cleanly to
+    # the new party's ledger.
+    customer_id: Optional[str] = None
+    # Manually-typed Bill Number for bill-number-mode parties (per dispatch).
+    bill_number: Optional[str] = None
     # Optional backdate / date correction. Accepts "YYYY-MM-DD" or full ISO
     # datetime; resolved to UTC at noon IST when only a date is given so
     # the slip lands cleanly in that day's bucket on the dispatch report.
@@ -2541,6 +2665,14 @@ async def update_dispatch(did: str, body: DispatchEdit, user=Depends(get_current
                 detail=f"Editing is locked for users after {window_days} day(s). Ask an admin to make this change.",
             )
     upd: Dict[str, Any] = {"updated_at": now_iso(), "updated_by": user["email"]}
+    # Reassign the slip to a different customer (admin can correct a slip
+    # punched under the wrong party). The ledger/report follow customer_id.
+    if body.customer_id is not None and body.customer_id and body.customer_id != existing.get("customer_id"):
+        cust = await db.customers.find_one({"id": body.customer_id}, {"_id": 0})
+        if not cust:
+            raise HTTPException(status_code=404, detail="Customer not found")
+        upd["customer_id"] = cust["id"]
+        upd["customer_name"] = cust.get("name") or existing.get("customer_name")
     if body.gr_number is not None:
         upd["gr_number"] = body.gr_number.strip()
     if body.gr_date is not None:
@@ -2567,6 +2699,8 @@ async def update_dispatch(did: str, body: DispatchEdit, user=Depends(get_current
         await _persist_customer_transport(existing.get("customer_id"), body.transport_name)
     if body.notes is not None:
         upd["notes"] = body.notes.strip()
+    if body.bill_number is not None:
+        upd["bill_number"] = body.bill_number.strip()
     if body.bag_count is not None:
         if int(body.bag_count) < 0:
             raise HTTPException(status_code=400, detail="bag_count cannot be negative")
@@ -3317,6 +3451,16 @@ async def daily_dispatch_report(date: Optional[str] = None, user=Depends(get_cur
     settings = await _get_settings_doc()
     edit_window_days = int(settings.get("edit_window_days", 3) or 0)
     is_admin = user.get("role") == "admin"
+    if is_blank_view(user):
+        return {
+            "date": target.isoformat(),
+            "groups": [],
+            "grand_total_pcs": 0,
+            "grand_total_value": 0,
+            "dispatch_count": 0,
+            "edit_window_days": edit_window_days,
+            "is_admin": is_admin,
+        }
     now_utc = datetime.now(timezone.utc)
     def _can_edit(d: Dict[str, Any]) -> bool:
         if is_admin:
@@ -3394,6 +3538,7 @@ async def daily_dispatch_report(date: Optional[str] = None, user=Depends(get_cur
                 "city": cust.get("city") or "",
                 "location": cust.get("location") or "",
                 "private_mark": cust.get("private_mark") or "",
+                "bill_number_mode": bool(cust.get("bill_number_mode")),
                 "price_list_id": pl_id or "",
                 "price_list_name": pl_meta["name"],
                 # Per-party flag driving the Dispatch Report Bill Amount
@@ -3446,6 +3591,7 @@ async def daily_dispatch_report(date: Optional[str] = None, user=Depends(get_cur
             "id": d.get("id"),
             "slip_no": d.get("slip_no"),
             "gr_number": d.get("gr_number") or "",
+            "bill_number": d.get("bill_number") or "",
             "gr_date": d.get("gr_date") or "",
             "total_value": float(d.get("total_value") or 0),
             "total_pcs": int(d.get("total_pcs") or 0),
@@ -4911,6 +5057,7 @@ async def dispatch_off_order(body: OffOrderDispatchIn, user=Depends(get_current_
         # enter it manually from Daily Report / Dispatch Ledger.
         "total_value": 0.0,
         "notes": (body.notes or "").strip(),
+        "bill_number": (body.bill_number or "").strip(),
         "bag_count": max(0, int(body.bag_count)) if (body.bag_count is not None) else 0,
         "dispatched_by": user["email"],
         "dispatched_at": dispatch_ts,

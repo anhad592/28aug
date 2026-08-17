@@ -34,10 +34,14 @@ export default function Orders() {
   const [q, setQ] = useState(searchParams.get("q") || "");
   const [filter, setFilter] = useState(searchParams.get("status") || "all");
   const [editTarget, setEditTarget] = useState(null);
+  const [highlightId, setHighlightId] = useState(null);
   const { state: confirmState, confirm, close: closeConfirm } = useConfirm();
 
-  const load = async () => {
-    setLoading(true);
+  const load = async (opts = {}) => {
+    // On a silent refresh (e.g. right after editing an order) we skip the
+    // loading skeleton so the list doesn't collapse and reset the scroll
+    // position — the user stays exactly where they were.
+    if (!opts.silent) setLoading(true);
     try {
       const params = filter !== "all" ? { status_filter: filter } : {};
       const { data } = await api.get("/orders", { params });
@@ -48,6 +52,21 @@ export default function Orders() {
   };
 
   useEffect(() => { load(); }, [filter]);
+
+  // After an edit, refresh in place then bring the edited order into view and
+  // briefly highlight it, so users never have to scroll to find it again.
+  const handleSaved = async (savedId) => {
+    await load({ silent: true });
+    if (savedId) setHighlightId(savedId);
+  };
+
+  useEffect(() => {
+    if (!highlightId) return;
+    const el = document.querySelector(`[data-testid="order-row-${highlightId}"]`);
+    if (el) el.scrollIntoView({ behavior: "smooth", block: "center" });
+    const timer = setTimeout(() => setHighlightId(null), 2600);
+    return () => clearTimeout(timer);
+  }, [highlightId, orders]);
 
   const filtered = orders.filter((o) => {
     if (!q) return true;
@@ -126,7 +145,7 @@ export default function Orders() {
         ) : (
           <div className="divide-y divide-slate-100">
             {filtered.map((o) => (
-              <div key={o.id} className={`p-4 sm:p-5 hover:bg-slate-50 transition-colors ${o.is_overdue ? "bg-rose-50/40 border-l-2 border-l-rose-400" : ""}`} data-testid={`order-row-${o.id}`}>
+              <div key={o.id} className={`p-4 sm:p-5 hover:bg-slate-50 transition-colors ${o.id === highlightId ? "bg-amber-100 ring-2 ring-inset ring-[#E65100]" : (o.is_overdue ? "bg-rose-50/40 border-l-2 border-l-rose-400" : "")}`} data-testid={`order-row-${o.id}`}>
                 <div className="flex items-start justify-between gap-3 flex-wrap">
                   <div className="flex-1 min-w-[200px]">
                     <div className="flex items-center gap-2 flex-wrap">
@@ -145,7 +164,7 @@ export default function Orders() {
                       {o.delivery_date && <> · {t("orders.delivery")}: {new Date(o.delivery_date).toLocaleDateString()}</>}
                     </div>
                     <div className="mt-2 flex flex-wrap gap-1.5">
-                      {o.items?.map((it, i) => (
+                      {filter !== "Dispatched" && o.items?.map((it, i) => (
                         <span key={i}
                               title={it.product_name || ""}
                               className="text-xs bg-slate-100 text-slate-800 px-2 py-1 rounded-sm border border-slate-200">
@@ -156,6 +175,26 @@ export default function Orders() {
                           )}
                         </span>
                       ))}
+                      {/* In the "Dispatched" view, show the quantities actually
+                          shipped for each order — this also surfaces PARTIALLY
+                          dispatched orders (still Pending) so the shipped qty is
+                          never hidden. The Pending/All views stay clean. */}
+                      {filter === "Dispatched" && o.dispatched_items?.length > 0 && (
+                        <div className="w-full flex flex-wrap items-center gap-1.5 mt-0.5">
+                          {o.dispatched_items.map((it, i) => (
+                            <span key={`d-${i}`}
+                                  title={it.product_name || ""}
+                                  data-testid={`order-dispatched-item-${o.id}-${i}`}
+                                  className="text-xs bg-indigo-50 text-indigo-900 px-2 py-1 rounded-sm border border-indigo-200">
+                              <span className="font-semibold">{it.item_name || it.product_name}</span>
+                              {it.variant ? ` (${it.variant})` : ""}: <span className="font-mono-num font-bold">{it.quantity}</span>
+                              {it.product_name && it.item_name && it.product_name !== it.item_name && (
+                                <span className="text-[10px] text-indigo-400 ml-1">· {it.product_name}</span>
+                              )}
+                            </span>
+                          ))}
+                        </div>
+                      )}
                     </div>
                     {o.notes && <div className="mt-2 text-xs text-slate-500 italic">&ldquo;{o.notes}&rdquo;</div>}
                   </div>
@@ -194,7 +233,7 @@ export default function Orders() {
         open={!!editTarget}
         order={editTarget}
         onOpenChange={(o) => { if (!o) setEditTarget(null); }}
-        onSaved={load}
+        onSaved={handleSaved}
       />
 
       <ConfirmDialog

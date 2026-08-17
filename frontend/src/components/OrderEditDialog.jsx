@@ -23,12 +23,13 @@ export default function OrderEditDialog({ open, order, onOpenChange, onSaved }) 
   const { t } = useTranslation();
   const [products, setProducts] = useState([]);
   const [customers, setCustomers] = useState([]);
+  const [items, setItems] = useState([]);
   const [form, setForm] = useState(null);
 
   useEffect(() => {
     if (!open) return;
-    Promise.all([api.get("/products"), api.get("/customers")])
-      .then(([p, c]) => { setProducts(p.data); setCustomers(c.data); })
+    Promise.all([api.get("/products"), api.get("/customers"), api.get("/items")])
+      .then(([p, c, i]) => { setProducts(p.data); setCustomers(c.data); setItems(i.data || []); })
       .catch(() => toast.error(t("common.failed")));
   }, [open, t]);
 
@@ -56,6 +57,10 @@ export default function OrderEditDialog({ open, order, onOpenChange, onSaved }) 
     const m = {}; products.forEach((p) => { m[p.name] = p; }); return m;
   }, [products]);
 
+  const itemById = useMemo(() => {
+    const m = {}; items.forEach((it) => { if (it.id) m[it.id] = it; }); return m;
+  }, [items]);
+
   if (!form) {
     return (
       <Dialog open={open} onOpenChange={onOpenChange}>
@@ -67,7 +72,17 @@ export default function OrderEditDialog({ open, order, onOpenChange, onSaved }) 
   }
 
   const getBagSizeFor = (row) => {
+    // 1) Prefer the SKU's CURRENT per-bag override from the items master, so
+    //    the live bag→pcs calculation always matches how the admin configured
+    //    the SKU (e.g. 180). This fixes older order rows that never captured
+    //    the override and were wrongly falling back to the product default (200).
+    const masterItem = row.item_id ? itemById[row.item_id] : null;
+    if (masterItem && masterItem.max_per_bag && Number(masterItem.max_per_bag) > 0) {
+      return Number(masterItem.max_per_bag);
+    }
+    // 2) Otherwise use the per-SKU value captured on the order row (if any).
     if (row.item_max_per_bag && Number(row.item_max_per_bag) > 0) return Number(row.item_max_per_bag);
+    // 3) Finally fall back to the product-level default.
     const prod = productByName[row.product_name];
     return prod?.max_per_bag ? Number(prod.max_per_bag) : null;
   };
@@ -152,7 +167,7 @@ export default function OrderEditDialog({ open, order, onOpenChange, onSaved }) 
       await api.patch(`/orders/${order.id}`, body);
       toast.success(t("orderEdit.saved"));
       onOpenChange(false);
-      onSaved?.();
+      onSaved?.(order.id);
     } catch (e) { toast.error(e?.response?.data?.detail || t("common.failed")); }
   };
 

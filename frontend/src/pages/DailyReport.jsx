@@ -131,8 +131,9 @@ export default function DailyReport() {
       .filter((x) => Object.keys(x.buf).length > 0);
 
     const hasMark = custBuf.private_mark !== undefined;
+    const hasBill = custBuf.bill_number !== undefined;
     const hasBags = custBuf.bag_count !== undefined && custBuf.bag_count !== "" && !Number.isNaN(Number(custBuf.bag_count));
-    if (!hasMark && !hasBags && dispatchBufs.length === 0) return;
+    if (!hasMark && !hasBill && !hasBags && dispatchBufs.length === 0) return;
 
     setSavingKey(`party:${cid}`);
     try {
@@ -152,6 +153,14 @@ export default function DailyReport() {
       // 2) Party-level fields
       if (hasMark) {
         await api.patch(`/customers/${cid}`, { private_mark: custBuf.private_mark });
+      }
+      // Bill Number (bill-mode parties): saved onto the dispatch(es), NOT the
+      // party — so a fresh bill is always required for the next dispatch.
+      if (hasBill && (dispatches || []).length > 0) {
+        for (const d of dispatches) {
+          if (d.can_edit === false) continue;
+          await api.patch(`/dispatches/${d.id}`, { bill_number: custBuf.bill_number });
+        }
       }
       if (hasBags && (dispatches || []).length > 0) {
         const bags = Math.max(0, parseInt(custBuf.bag_count, 10) || 0);
@@ -419,6 +428,13 @@ body { padding: 12mm; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI"
             const partyPvtEdit = customerEdit(g.customer_id, "private_mark");
             const effPvtMark = partyPvtEdit !== undefined ? partyPvtEdit : (g.private_mark || "");
             const hasPvt = !!(effPvtMark && String(effPvtMark).trim());
+            // Bill-number-mode parties satisfy the "mark" requirement with a
+            // Bill Number (stored per dispatch) instead of a private mark.
+            const billMode = !!g.bill_number_mode;
+            const billNoEdit = customerEdit(g.customer_id, "bill_number");
+            const effBillNo = billNoEdit !== undefined ? billNoEdit : ((g.dispatches || [])[0]?.bill_number || "");
+            const hasBillNo = !!(effBillNo && String(effBillNo).trim());
+            const hasMarkReq = billMode ? hasBillNo : hasPvt;
             const bagEdit = customerEdit(g.customer_id, "bag_count");
             const dsp0 = (g.dispatches || [])[0];
             const effBags = bagEdit !== undefined ? Number(bagEdit || 0) : Number(dsp0?.bag_count || 0);
@@ -442,7 +458,7 @@ body { padding: 12mm; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI"
               || (dispatchStatuses.length > 0 && dispatchStatuses.every((s) => s.hasBill));
             const isPartyComplete = ludhiana
               ? allBillOk
-              : (hasPvt && hasBags && allDispatchesOk);
+              : (hasMarkReq && hasBags && allDispatchesOk);
             const sectionClass = isPartyComplete
               ? "bg-white border-2 border-emerald-500 border-l-8 border-l-emerald-600 rounded-sm overflow-hidden print:break-inside-avoid"
               : "bg-white border-2 border-red-500 border-l-8 border-l-red-700 rounded-sm overflow-hidden print:break-inside-avoid";
@@ -452,7 +468,7 @@ body { padding: 12mm; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI"
             const missingParts = ludhiana
               ? [!allBillOk && "bill amt"].filter(Boolean)
               : [
-                  !hasPvt && "pvt mark",
+                  !hasMarkReq && (billMode ? "bill number" : "pvt mark"),
                   !hasBags && "bags",
                   !allGrOk && "GR#",
                   billRequired && !allBillOk && "bill amt",
@@ -560,10 +576,15 @@ body { padding: 12mm; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI"
                       <div className="grid grid-cols-5 gap-3 text-[11px]">
                         <div>
                           <div className="uppercase tracking-wider text-slate-500 font-bold text-[9px]">
-                            Private mark
+                            {g.bill_number_mode ? "Bill Number" : "Private mark"}
                           </div>
                           <div className="font-bold text-slate-900 mt-0.5" data-testid={`report-print-pvtmark-${g.customer_id}`}>
                             {(() => {
+                              if (g.bill_number_mode) {
+                                const bbuf = customerEdit(g.customer_id, "bill_number");
+                                const bval = bbuf !== undefined ? bbuf : ((g.dispatches || [])[0]?.bill_number || "");
+                                return String(bval).trim() || "—";
+                              }
                               const buf = customerEdit(g.customer_id, "private_mark");
                               const val = buf !== undefined ? buf : (g.private_mark || "");
                               return String(val).trim() || "—";
@@ -759,22 +780,39 @@ body { padding: 12mm; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI"
                       <div className="grid grid-cols-1 sm:grid-cols-12 gap-2 items-end pt-2 border-t border-orange-100">
                           {!ludhiana && (
                             <>
-                              <div className="sm:col-span-2 text-[10px] uppercase tracking-wider text-slate-500 font-bold flex items-center gap-1">
-                                <Tag className="w-3 h-3" /> Private mark
+                              <div className="sm:col-span-2 text-[10px] uppercase tracking-wider font-bold flex items-center gap-1"
+                                   style={{ color: g.bill_number_mode ? "#4338CA" : undefined }}>
+                                <Tag className="w-3 h-3" /> {g.bill_number_mode ? "Bill Number" : "Private mark"}
                               </div>
                               <div className="sm:col-span-4">
-                                <Label className="text-[10px] uppercase font-bold text-slate-500">Mark</Label>
-                                <Input
-                                  value={
-                                    customerEdit(g.customer_id, "private_mark") !== undefined
-                                      ? customerEdit(g.customer_id, "private_mark")
-                                      : (g.private_mark || "")
-                                  }
-                                  onChange={(e) => updEdit("customer", g.customer_id, { private_mark: e.target.value })}
-                                  placeholder="Stenciled mark on packages (e.g. AB)"
-                                  data-testid={`report-pvtmark-input-${g.customer_id}`}
-                                  className="h-9 rounded-sm mt-0.5"
-                                />
+                                <Label className="text-[10px] uppercase font-bold text-slate-500">
+                                  {g.bill_number_mode ? "Bill Number" : "Mark"}
+                                </Label>
+                                {g.bill_number_mode ? (
+                                  <Input
+                                    value={
+                                      customerEdit(g.customer_id, "bill_number") !== undefined
+                                        ? customerEdit(g.customer_id, "bill_number")
+                                        : ((g.dispatches || [])[0]?.bill_number || "")
+                                    }
+                                    onChange={(e) => updEdit("customer", g.customer_id, { bill_number: e.target.value })}
+                                    placeholder="Enter Bill Number Here"
+                                    data-testid={`report-billnumber-input-${g.customer_id}`}
+                                    className="h-9 rounded-sm mt-0.5 border-indigo-400 focus-visible:ring-indigo-400 bg-indigo-50/40"
+                                  />
+                                ) : (
+                                  <Input
+                                    value={
+                                      customerEdit(g.customer_id, "private_mark") !== undefined
+                                        ? customerEdit(g.customer_id, "private_mark")
+                                        : (g.private_mark || "")
+                                    }
+                                    onChange={(e) => updEdit("customer", g.customer_id, { private_mark: e.target.value })}
+                                    placeholder="Stenciled mark on packages (e.g. AB)"
+                                    data-testid={`report-pvtmark-input-${g.customer_id}`}
+                                    className="h-9 rounded-sm mt-0.5"
+                                  />
+                                )}
                               </div>
                               {(() => {
                                 const bagBuf = customerEdit(g.customer_id, "bag_count");
@@ -810,6 +848,7 @@ body { padding: 12mm; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI"
                             // Single save button gathers dirty state across
                             // every dispatch row AND the party-level fields.
                             const partyDirty = customerEdit(g.customer_id, "private_mark") !== undefined
+                              || customerEdit(g.customer_id, "bill_number") !== undefined
                               || customerEdit(g.customer_id, "bag_count") !== undefined;
                             const anyDispatchDirty = (g.dispatches || []).some(
                               (d) => (edits[`dispatch:${d.id}`] && Object.keys(edits[`dispatch:${d.id}`]).length > 0),
