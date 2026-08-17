@@ -1485,6 +1485,8 @@ export default function DispatchLedger() {
                 const grandTotal = Math.round(lineAmount + gst);
                 const cashAmount = Math.max(0, grandTotal - billAmount);
                 const privateMark = selectedParty?.private_mark || "";
+                const billMode = !!selectedParty?.bill_number_mode;
+                const billNo = slipRow.raw.bill_number || "";
                 const bagCount = Number(slipRow.raw.bag_count || 0);
                 return (
                   <div className="flex flex-wrap items-start gap-3 mb-3">
@@ -1498,12 +1500,12 @@ export default function DispatchLedger() {
                         <span className="tabular-nums font-bold text-slate-900">₹{cashAmount.toLocaleString("en-IN")}/-</span>
                       </div>
                     </div>
-                    {/* Private Mark (top) + No. of Bags (bottom) — hidden for Ludhiana parties */}
+                    {/* Private Mark (or Bill Number) + No. of Bags — hidden for Ludhiana parties */}
                     {!isLudhianaSlip && (
                       <div className="inline-block border-2 border-slate-400 rounded-sm divide-y divide-slate-300" data-testid="slip-mark-bags-box">
                         <div className="px-3 py-2 flex items-center justify-between gap-6">
-                          <span className="text-xs font-bold uppercase tracking-wider text-slate-700">Private mark</span>
-                          <span className="font-bold text-slate-900" data-testid="slip-private-mark">{privateMark || "—"}</span>
+                          <span className="text-xs font-bold uppercase tracking-wider text-slate-700">{billMode ? "Bill number" : "Private mark"}</span>
+                          <span className="font-bold text-slate-900" data-testid="slip-private-mark">{(billMode ? billNo : privateMark) || "—"}</span>
                         </div>
                         <div className="px-3 py-2 flex items-center justify-between gap-6">
                           <span className="text-xs font-bold uppercase tracking-wider text-slate-700">No. of bags</span>
@@ -1601,7 +1603,11 @@ export default function DispatchLedger() {
                     gst,
                     grand_total: grandTotal,
                     total_pcs: Number(slipRow.raw.total_pcs || 0),
-                    private_mark: isLudhianaShare ? null : (selectedParty?.private_mark || null),
+                    private_mark: isLudhianaShare
+                      ? null
+                      : (selectedParty?.bill_number_mode
+                          ? (slipRow.raw.bill_number || null)
+                          : (selectedParty?.private_mark || null)),
                     bag_count: isLudhianaShare ? 0 : Number(slipRow.raw.bag_count || 0),
                     notes: slipRow.raw.notes != null && slipRow.raw.notes !== ""
                       ? String(slipRow.raw.notes)
