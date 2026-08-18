@@ -1,6 +1,7 @@
 import React, { createContext, useContext, useEffect, useState } from "react";
 import { api } from "@/lib/api";
 import { hasPermission } from "@/lib/permissions";
+import { toast } from "sonner";
 
 const AuthCtx = createContext(null);
 
@@ -53,10 +54,13 @@ export function AuthProvider({ children }) {
     return applySession(data);
   };
 
-  const logout = () => {
+  const logout = (reason) => {
     localStorage.removeItem("foms_token");
     localStorage.removeItem("foms_user");
     setUser(null);
+    if (reason === "inactivity") {
+      try { toast("Signed out after 20 minutes of inactivity"); } catch { /* ignore */ }
+    }
     // Wipe SW caches so the next person using this device starts fresh —
     // the SW listens for {type:"jk-logout"} and clears every owned cache.
     try {
@@ -65,6 +69,28 @@ export function AuthProvider({ children }) {
       }
     } catch { /* ignore */ }
   };
+
+  // ── Auto-logout after 20 minutes of inactivity ──────────────────────
+  // Any real user interaction (mouse, keyboard, touch, scroll) resets the
+  // idle timer. If the app sits untouched for 20 minutes, the session is
+  // cleared automatically. Only armed while someone is logged in.
+  useEffect(() => {
+    if (!user) return;
+    const IDLE_MS = 20 * 60 * 1000; // 20 minutes
+    let timer;
+    const doLogout = () => logout("inactivity");
+    const reset = () => {
+      clearTimeout(timer);
+      timer = setTimeout(doLogout, IDLE_MS);
+    };
+    const events = ["mousemove", "mousedown", "keydown", "touchstart", "scroll", "click", "visibilitychange"];
+    events.forEach((e) => window.addEventListener(e, reset, { passive: true }));
+    reset(); // start the countdown
+    return () => {
+      clearTimeout(timer);
+      events.forEach((e) => window.removeEventListener(e, reset));
+    };
+  }, [user]);
 
   return (
     <AuthCtx.Provider value={{

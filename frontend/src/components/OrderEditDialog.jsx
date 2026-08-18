@@ -190,7 +190,14 @@ export default function OrderEditDialog({ open, order, onOpenChange, onSaved }) 
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  {customers.map((c) => <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>)}
+                  {customers.map((c) => {
+                    const loc = [c.city, c.location, c.address].map((x) => (x || "").trim()).find(Boolean) || "";
+                    return (
+                      <SelectItem key={c.id} value={c.id}>
+                        {c.name}{loc ? ` · ${loc}` : ""}
+                      </SelectItem>
+                    );
+                  })}
                 </SelectContent>
               </Select>
             </div>
