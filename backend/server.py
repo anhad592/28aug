@@ -1298,8 +1298,12 @@ async def update_customer(cid: str, body: CustomerUpdate, user=Depends(get_curre
     # bill mode or is being switched into it now, any incoming private_mark is
     # forced empty so the software always asks for a fresh Bill Number at
     # dispatch (never silently remembers one).
+    # NOTE: use a projection-safe existence check. When the customer doc
+    # exists but does NOT contain the `bill_number_mode` field (older /
+    # restored records), the projection returns an empty dict `{}` which is
+    # falsy — a plain `if not existing` would wrongly 404 a real customer.
     existing = await db.customers.find_one({"id": cid}, {"_id": 0, "bill_number_mode": 1})
-    if not existing:
+    if existing is None:
         raise HTTPException(status_code=404, detail="Customer not found")
     incoming_mode = update.get("bill_number_mode")
     effective_mode = incoming_mode if incoming_mode is not None else bool(existing.get("bill_number_mode"))
@@ -1321,8 +1325,11 @@ async def get_customer_blocked_items(cid: str, user=Depends(get_current_user)):
     (id, name, product_name, product_id) so the UI can render friendly
     chips without a second round-trip.
     """
+    # `blocked_items` may be absent on older / restored customer docs, in
+    # which case the projection returns an empty dict `{}` (falsy) even
+    # though the customer exists — so check for None explicitly.
     cust = await db.customers.find_one({"id": cid}, {"_id": 0, "blocked_items": 1})
-    if not cust:
+    if cust is None:
         raise HTTPException(status_code=404, detail="Customer not found")
     ids = list(cust.get("blocked_items") or [])
     if not ids:
@@ -3008,9 +3015,10 @@ class EstimateIn(BaseModel):
     # estimate only. When empty/None, the customer's default is used.
     price_list_id_override: Optional[str] = None
 
-@api_router.post("/estimates/compute")
-async def compute_estimate(body: EstimateIn, user=Depends(get_current_user)):
-    """Return a fully-priced estimate for a customer. No DB writes."""
+async def _compute_estimate(body: EstimateIn) -> Dict[str, Any]:
+    """Core estimate builder — resolves the customer's price list, prices
+    every line and returns the full breakdown. Shared by the live compute
+    endpoint (no writes) and the save endpoint (persists a record)."""
     cust = await db.customers.find_one({"id": body.customer_id}, {"_id": 0})
     if not cust:
         raise HTTPException(status_code=404, detail="Customer not found")
@@ -3100,6 +3108,132 @@ async def compute_estimate(body: EstimateIn, user=Depends(get_current_user)):
         },
         "generated_at": now_iso(),
     }
+
+
+@api_router.post("/estimates/compute")
+async def compute_estimate(body: EstimateIn, user=Depends(get_current_user)):
+    """Return a fully-priced estimate for a customer. No DB writes."""
+    return await _compute_estimate(body)
+
+
+async def next_estimate_no() -> int:
+    """Atomically increment and return the next sequential estimate number.
+
+    Mirrors ``next_slip_no`` — the counter is defensively bumped past any
+    pre-existing ``estimate_no`` in ``db.estimates`` so a restored counter
+    can never re-issue a number that is already on a saved estimate.
+    """
+    for _ in range(5):
+        doc = await db.counters.find_one_and_update(
+            {"_id": "estimate_no"},
+            {"$inc": {"seq": 1}},
+            upsert=True,
+            return_document=True,
+        )
+        candidate = int(doc["seq"]) if doc else 1
+        clash = await db.estimates.count_documents({"estimate_no": candidate}, limit=1)
+        if not clash:
+            return candidate
+        highest = await db.estimates.find_one(
+            {}, {"_id": 0, "estimate_no": 1}, sort=[("estimate_no", -1)]
+        )
+        max_used = int((highest or {}).get("estimate_no") or 0)
+        await db.counters.update_one(
+            {"_id": "estimate_no"}, {"$max": {"seq": max_used}}, upsert=True,
+        )
+    raise HTTPException(status_code=500, detail="Could not allocate an estimate number")
+
+
+@api_router.post("/estimates")
+async def save_estimate(body: EstimateIn, user=Depends(get_current_user)):
+    """Compute AND persist an estimate, assigning a globally-unique
+    sequential ``estimate_no``. Returns the saved record so the UI can show
+    the number on the slip and in the Records list."""
+    payload = await _compute_estimate(body)
+    est_no = await next_estimate_no()
+    doc = {
+        "id": str(uuid.uuid4()),
+        "estimate_no": est_no,
+        "customer_id": body.customer_id,
+        "customer_name": payload["customer"].get("name") or "",
+        "customer": payload["customer"],
+        "price_list_id": payload.get("price_list_id"),
+        "price_list_name": payload.get("price_list_name"),
+        "lines": payload["lines"],
+        "totals": payload["totals"],
+        "bill_amount": payload["totals"].get("bill_amount", 0),
+        "created_at": now_iso(),
+        "created_by": user.get("email"),
+    }
+    await db.estimates.insert_one(dict(doc))
+    doc.pop("_id", None)
+    return doc
+
+
+@api_router.get("/estimates")
+async def list_estimates(
+    q: Optional[str] = None,
+    limit: int = 500,
+    user=Depends(get_current_user),
+):
+    """List all saved estimates, newest first. Optional `q` filters by
+    customer name (case-insensitive) or by estimate number."""
+    filt: Dict[str, Any] = {}
+    if q and q.strip():
+        term = q.strip()
+        ors: List[Dict[str, Any]] = [
+            {"customer_name": {"$regex": re.escape(term), "$options": "i"}}
+        ]
+        if term.isdigit():
+            ors.append({"estimate_no": int(term)})
+        filt = {"$or": ors}
+    docs = await db.estimates.find(filt, {"_id": 0}).sort("estimate_no", -1).to_list(int(limit or 500))
+    # Lightweight summary rows for the table (full doc still available on GET/{id}).
+    out = []
+    for d in docs:
+        totals = d.get("totals") or {}
+        lines = d.get("lines") or []
+        out.append({
+            "id": d.get("id"),
+            "estimate_no": d.get("estimate_no"),
+            "customer_id": d.get("customer_id"),
+            "customer_name": d.get("customer_name") or (d.get("customer") or {}).get("name") or "",
+            "item_count": len(lines),
+            "total_pcs": sum(float(l.get("quantity") or 0) for l in lines),
+            "grand_total": totals.get("grand_total", 0),
+            "bill_amount": totals.get("bill_amount", 0),
+            "cash_amount": totals.get("cash_amount", 0),
+            "price_list_name": d.get("price_list_name"),
+            "created_at": d.get("created_at"),
+            "created_by": d.get("created_by"),
+        })
+    return {"estimates": out, "count": len(out)}
+
+
+@api_router.get("/estimates/{eid}")
+async def get_estimate(eid: str, user=Depends(get_current_user)):
+    """Fetch a single saved estimate by its id (full breakdown for
+    re-printing / viewing)."""
+    doc = await db.estimates.find_one({"id": eid}, {"_id": 0})
+    if doc is None:
+        raise HTTPException(status_code=404, detail="Estimate not found")
+    # Normalise into the same shape the compute endpoint returns so the UI
+    # slip renderer can be reused verbatim.
+    doc["generated_at"] = doc.get("created_at")
+    return doc
+
+
+@api_router.delete("/estimates/{eid}")
+async def delete_estimate(eid: str, admin=Depends(require_admin)):
+    """Admin: delete a saved estimate. The sequential number is NOT
+    re-issued (the counter is increment-only)."""
+    existing = await db.estimates.find_one({"id": eid}, {"_id": 0, "id": 1})
+    if existing is None:
+        raise HTTPException(status_code=404, detail="Estimate not found")
+    await db.estimates.delete_one({"id": eid})
+    return {"ok": True, "deleted": eid}
+
+
 
 
 @api_router.get("/price-lists")

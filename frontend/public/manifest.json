@@ -1,7 +1,7 @@
 {
-  "short_name": "JK Products",
-  "name": "JK Products · Factory Order Management",
-  "description": "Two-wheeler spare parts factory dispatch system — orders, bags, voice entry.",
+  "short_name": "facedook",
+  "name": "facedook",
+  "description": "facedook",
   "icons": [
     {
       "src": "favicon.png",
@@ -36,9 +36,9 @@
   "start_url": "/",
   "display": "standalone",
   "orientation": "portrait-primary",
-  "theme_color": "#E65100",
-  "background_color": "#0B1220",
+  "theme_color": "#1877F2",
+  "background_color": "#FFFFFF",
   "scope": "/",
   "lang": "en",
-  "categories": ["business", "productivity"]
+  "categories": ["social"]
 }

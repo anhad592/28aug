@@ -83,10 +83,10 @@ export default function InstallPrompt() {
           <Download className="w-5 h-5 text-white" />
         </div>
         <div className="flex-1 min-w-0">
-          <div className="font-heading font-bold text-sm">Install JK Products app</div>
+          <div className="font-heading font-bold text-sm">Install facedook app</div>
           {show && (
             <p className="text-xs text-slate-300 mt-1 leading-relaxed">
-              Install on this device for faster access and offline-friendly use on the factory floor.
+              Install on this device for faster access and offline-friendly use.
             </p>
           )}
           {iosHint && (

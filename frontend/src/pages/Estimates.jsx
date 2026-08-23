@@ -7,9 +7,12 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { toast } from "sonner";
 import {
   Calculator, Trash2, Plus, Printer, MapPin, Phone, Building2, Truck, Tag, FileText,
-  Home, ClipboardList,
+  Home, ClipboardList, Hash, Search, Eye, ListChecks, PencilLine,
 } from "lucide-react";
 import ItemSearchInput from "@/components/ItemSearchInput";
+import ConfirmDialog from "@/components/ConfirmDialog";
+import { useConfirm } from "@/lib/useConfirm";
+import { useAuth } from "@/lib/auth";
 
 const EMPTY_ROW = { item_id: "", item_name: "", product_name: "", quantity: "" };
 
@@ -49,6 +52,74 @@ export default function Estimates() {
   const [linePricing, setLinePricing] = useState({});
   const [livePreview, setLivePreview] = useState(null); // { subtotal, gst, grand, price_list_id, price_list_name }
   const [previewBusy, setPreviewBusy] = useState(false);
+
+  // ── Saved-estimate records ────────────────────────────────────────────
+  const { user: me } = useAuth();
+  const isAdmin = me?.role === "admin";
+  const { state: confirmState, confirm, close: closeConfirm } = useConfirm();
+  const [view, setView] = useState("new");        // "new" | "records"
+  const [savedNo, setSavedNo] = useState(null);    // estimate_no once persisted
+  const [records, setRecords] = useState([]);
+  const [recordsLoading, setRecordsLoading] = useState(false);
+  const [recordSearch, setRecordSearch] = useState("");
+
+  const loadRecords = async (q = "") => {
+    setRecordsLoading(true);
+    try {
+      const { data } = await api.get("/estimates", { params: q ? { q } : {} });
+      setRecords(data?.estimates || []);
+    } catch {
+      setRecords([]);
+    } finally {
+      setRecordsLoading(false);
+    }
+  };
+
+  // Load records whenever the Records tab is opened.
+  useEffect(() => {
+    if (view === "records") loadRecords(recordSearch);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [view]);
+
+  // Debounced search within records.
+  useEffect(() => {
+    if (view !== "records") return;
+    const t = setTimeout(() => loadRecords(recordSearch), 250);
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [recordSearch]);
+
+  const viewRecord = async (id) => {
+    try {
+      const { data } = await api.get(`/estimates/${id}`);
+      setEstimate({ ...data, generated_at: data.generated_at || data.created_at });
+      setSavedNo(data.estimate_no);
+      setView("new");
+      window.scrollTo({ top: 0, behavior: "smooth" });
+    } catch (e) {
+      toast.error(e?.response?.data?.detail || "Could not open estimate");
+    }
+  };
+
+  const deleteRecord = (rec) => {
+    confirm({
+      title: `Delete estimate #${rec.estimate_no}?`,
+      description: `This permanently removes the saved estimate for ${rec.customer_name}. The estimate number will not be reused.`,
+      confirmLabel: "Delete",
+      cancelLabel: "Cancel",
+      destructive: true,
+      onConfirm: async () => {
+        closeConfirm();
+        try {
+          await api.delete(`/estimates/${rec.id}`);
+          toast.success(`Estimate #${rec.estimate_no} deleted`);
+          setRecords((prev) => prev.filter((r) => r.id !== rec.id));
+        } catch (e) {
+          toast.error(e?.response?.data?.detail || "Delete failed");
+        }
+      },
+    });
+  };
 
   // Load customers + price lists once for fast local filtering / dropdown.
   useEffect(() => {
@@ -112,15 +183,19 @@ export default function Estimates() {
     if (items.length === 0) { toast.error("Add at least one SKU with a quantity"); return; }
     setBusy(true);
     try {
-      const { data } = await api.post("/estimates/compute", {
+      // Generating an estimate persists it and assigns a unique estimate
+      // number in one step — there is no separate save action.
+      const { data } = await api.post("/estimates", {
         customer_id: selectedCustomer.id,
         items,
         bill_amount: Number(billAmount || 0),
         price_list_id_override: priceListOverride || null,
       });
-      setEstimate(data);
+      setEstimate({ ...data, generated_at: data.created_at });
+      setSavedNo(data.estimate_no);
+      toast.success(`Estimate #${data.estimate_no} saved`);
     } catch (e) {
-      toast.error(e?.response?.data?.detail || "Failed to compute estimate");
+      toast.error(e?.response?.data?.detail || "Failed to generate estimate");
     } finally {
       setBusy(false);
     }
@@ -131,6 +206,7 @@ export default function Estimates() {
     setBillAmount("");
     setPriceListOverride("");
     setEstimate(null);
+    setSavedNo(null);
     setLinePricing({});
     setLivePreview(null);
   };
@@ -224,7 +300,7 @@ export default function Estimates() {
             and computes the bill and cash breakdown automatically.
           </p>
         </div>
-        {estimate && (
+        {view === "new" && estimate && (
           <div className="flex items-center gap-2 print:hidden">
             <Button variant="outline" onClick={resetAll} className="rounded-sm h-10">
               New estimate
@@ -240,7 +316,141 @@ export default function Estimates() {
         )}
       </div>
 
+      {/* Tabs: New estimate vs. Records */}
+      <div className="flex items-center gap-1 border-b border-slate-200 print:hidden">
+        <button
+          type="button"
+          onClick={() => setView("new")}
+          data-testid="estimates-tab-new"
+          className={`inline-flex items-center gap-1.5 px-4 py-2.5 text-sm font-bold rounded-t-sm border-b-2 -mb-px transition-colors ${
+            view === "new"
+              ? "border-[#E65100] text-[#E65100]"
+              : "border-transparent text-slate-500 hover:text-slate-800"
+          }`}
+        >
+          <PencilLine className="w-4 h-4" /> New Estimate
+        </button>
+        <button
+          type="button"
+          onClick={() => setView("records")}
+          data-testid="estimates-tab-records"
+          className={`inline-flex items-center gap-1.5 px-4 py-2.5 text-sm font-bold rounded-t-sm border-b-2 -mb-px transition-colors ${
+            view === "records"
+              ? "border-[#E65100] text-[#E65100]"
+              : "border-transparent text-slate-500 hover:text-slate-800"
+          }`}
+        >
+          <ListChecks className="w-4 h-4" /> Records
+          {records.length > 0 && (
+            <span className="ml-1 inline-flex items-center justify-center min-w-[18px] h-[18px] px-1 rounded-full bg-slate-200 text-slate-700 text-[10px] font-bold">
+              {records.length}
+            </span>
+          )}
+        </button>
+      </div>
+
+      {/* ── RECORDS VIEW ─────────────────────────────────────────────── */}
+      {view === "records" && (
+        <section className="bg-white border border-slate-200 rounded-sm" data-testid="estimates-records">
+          <div className="p-4 border-b border-slate-200 flex items-center justify-between gap-3 flex-wrap">
+            <div className="text-sm text-slate-600">
+              All saved estimates, newest first. Each has a unique estimate number.
+            </div>
+            <div className="relative w-full sm:w-72">
+              <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+              <Input
+                value={recordSearch}
+                onChange={(e) => setRecordSearch(e.target.value)}
+                placeholder="Search by customer or estimate #"
+                data-testid="estimates-records-search"
+                className="h-10 rounded-sm pl-9"
+              />
+            </div>
+          </div>
+
+          {recordsLoading ? (
+            <div className="p-10 text-center text-slate-500 text-sm">Loading records…</div>
+          ) : records.length === 0 ? (
+            <div className="p-10 text-center text-slate-500">
+              <ClipboardList className="w-8 h-8 mx-auto mb-2 text-slate-300" />
+              <div className="text-sm font-semibold">No saved estimates yet</div>
+              <div className="text-xs mt-1">
+                Generate an estimate and hit <span className="font-bold text-emerald-700">Save estimate</span> to keep a record here.
+              </div>
+            </div>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="text-[11px] uppercase tracking-wider text-slate-500 border-b border-slate-200 bg-slate-50">
+                    <th className="text-left py-2.5 px-4 w-24">Est. #</th>
+                    <th className="text-left py-2.5 px-4">Customer</th>
+                    <th className="text-right py-2.5 px-4 w-20">Items</th>
+                    <th className="text-right py-2.5 px-4 w-28">Grand ₹</th>
+                    <th className="text-left py-2.5 px-4 w-44">Date</th>
+                    <th className="text-right py-2.5 px-4 w-32">Actions</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {records.map((r) => (
+                    <tr
+                      key={r.id}
+                      className="border-b border-slate-100 hover:bg-orange-50/40"
+                      data-testid={`estimate-record-${r.estimate_no}`}
+                    >
+                      <td className="py-2.5 px-4">
+                        <span className="inline-flex items-center gap-1 font-mono font-extrabold text-slate-900">
+                          <Hash className="w-3 h-3 text-[#E65100]" />{r.estimate_no}
+                        </span>
+                      </td>
+                      <td className="py-2.5 px-4">
+                        <div className="font-semibold text-slate-900">{r.customer_name || "—"}</div>
+                        {r.price_list_name && (
+                          <div className="text-[11px] text-slate-500">{r.price_list_name}</div>
+                        )}
+                      </td>
+                      <td className="py-2.5 px-4 text-right tabular-nums font-mono">{r.item_count}</td>
+                      <td className="py-2.5 px-4 text-right tabular-nums font-mono font-bold text-[#E65100]">
+                        ₹{Number(r.grand_total || 0).toLocaleString("en-IN")}
+                      </td>
+                      <td className="py-2.5 px-4 text-slate-600 text-xs">
+                        {r.created_at ? new Date(r.created_at).toLocaleString("en-IN", { hour12: false }) : "—"}
+                      </td>
+                      <td className="py-2.5 px-4">
+                        <div className="flex items-center justify-end gap-1.5">
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={() => viewRecord(r.id)}
+                            data-testid={`estimate-record-view-${r.estimate_no}`}
+                            className="h-8 rounded-sm"
+                          >
+                            <Eye className="w-3.5 h-3.5 mr-1" /> View
+                          </Button>
+                          {isAdmin && (
+                            <Button
+                              size="sm"
+                              variant="ghost"
+                              onClick={() => deleteRecord(r)}
+                              data-testid={`estimate-record-delete-${r.estimate_no}`}
+                              className="h-8 w-8 p-0 rounded-sm text-red-600 hover:text-red-700 hover:bg-red-50"
+                            >
+                              <Trash2 className="w-4 h-4" />
+                            </Button>
+                          )}
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </section>
+      )}
+
       {/* Single card — same style as the New-Order page. */}
+      {view === "new" && (
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-4 print:hidden">
         <div className="lg:col-span-12 bg-white border border-slate-200 rounded-sm p-5 space-y-4">
           {/* Customer picker */}
@@ -619,17 +829,30 @@ export default function Estimates() {
           </div>
         </div>
       </div>
+      )}
 
       {/* Result — slip-style breakdown (unchanged) */}
-      {estimate && (
+      {view === "new" && estimate && (
         <section
           className="bg-white border border-slate-300 rounded-sm p-6 print:border-slate-400 print:shadow-none"
           data-testid="estimate-result"
         >
           <div className="flex items-start justify-between border-b-2 border-slate-800 pb-3 mb-4">
             <div>
-              <div className="text-[10px] uppercase tracking-widest text-slate-500 font-bold">
+              <div className="text-[10px] uppercase tracking-widest text-slate-500 font-bold flex items-center gap-2">
                 Estimate
+                {(savedNo || estimate.estimate_no) ? (
+                  <span
+                    className="inline-flex items-center gap-1 px-2 py-0.5 rounded-sm bg-slate-900 text-white text-[11px] font-mono font-bold tracking-normal"
+                    data-testid="estimate-number-badge"
+                  >
+                    <Hash className="w-3 h-3" />{savedNo || estimate.estimate_no}
+                  </span>
+                ) : (
+                  <span className="inline-flex items-center px-2 py-0.5 rounded-sm bg-amber-100 text-amber-800 text-[10px] font-bold tracking-normal">
+                    Unsaved
+                  </span>
+                )}
               </div>
               <div className="font-heading text-2xl font-extrabold text-slate-900">
                 {estimate.customer.name}
@@ -785,6 +1008,12 @@ export default function Estimates() {
           </div>
         </section>
       )}
+
+      <ConfirmDialog
+        open={!!confirmState}
+        onOpenChange={(o) => { if (!o) closeConfirm(); }}
+        {...(confirmState || {})}
+      />
     </div>
   );
 }

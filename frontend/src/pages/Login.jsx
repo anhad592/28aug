@@ -2,17 +2,16 @@ import React, { useState } from "react";
 import { useAuth } from "@/lib/auth";
 import { useNavigate } from "react-router-dom";
 import { useTranslation } from "react-i18next";
-import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
 import { toast } from "sonner";
-import { Lock, Wrench, ShieldCheck, AlertTriangle } from "lucide-react";
+import { ShieldCheck, AlertTriangle, Heart, Smile, Clock, Bookmark, Star, MessageCircle } from "lucide-react";
 import LanguageSwitcher from "@/components/LanguageSwitcher";
-import BrandMark from "@/components/BrandMark";
 import { enforcedAttestation, silentAttestation } from "@/lib/silentAttestation";
 import { probeCapabilities, isMobileDevice } from "@/lib/device";
 
-const BG = "https://images.unsplash.com/photo-1496247749665-49cf5b1022e9?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NDQ2Mzl8MHwxfHNlYXJjaHwyfHxtZXRhbCUyMG1hbnVmYWN0dXJpbmclMjBtYWNoaW5lcnl8ZW58MHx8fHwxNzgwNzQ5Njg5fDA&ixlib=rb-4.1.0&q=85";
+// Login palette
+const BLUE = "#1877F2";
+const BLUE_HOVER = "#166FE5";
 
 export default function Login() {
   const { login, verifyOtp, user } = useAuth();
@@ -48,15 +47,6 @@ export default function Login() {
   // Post-authentication attestation + navigation. Shared by the password
   // step (non-admin) and the OTP step (admin) so both behave identically.
   const finishLogin = async () => {
-    // ────────────────────────────────────────────────────────────────
-    // Verification policy:
-    //   • MOBILE / TABLET devices (phones, iPads) that also expose a
-    //     camera + geolocation API → verification is MANDATORY.
-    //   • DESKTOP / LAPTOP devices → SOFT: signed in immediately with a
-    //     best-effort silent attestation running in the background.
-    // IMPORTANT: enforcedAttestation() MUST run inside the submit handler
-    // so it inherits the user-gesture context iOS Safari requires.
-    // ────────────────────────────────────────────────────────────────
     const probed = caps || (await probeCapabilities());
     const mobile = isMobileDevice();
     if (mobile && probed?.camera && probed?.gps) {
@@ -118,142 +108,185 @@ export default function Login() {
     setOtpCode("");
   };
 
-  const quickFill = (role) => {
-    if (role === "admin") { setEmail("admin"); setPassword("admin123"); }
-    else { setEmail("user"); setPassword("user123"); }
-  };
-
-  const heroTitle = t("login.heroTitle").split("\n");
+  const notAvailable = (msg) => toast.info(msg);
 
   return (
-    <div className="min-h-[100dvh] flex flex-col md:flex-row">
-      {/* Left visual */}
-      <div className="hidden md:flex md:w-1/2 relative" style={{ backgroundImage: `url(${BG})`, backgroundSize: "cover", backgroundPosition: "center" }}>
-        <div className="absolute inset-0 bg-slate-900/80" />
-        <div className="relative z-10 flex flex-col justify-between p-10 text-white w-full">
-          <div className="flex items-center gap-3">
-            <BrandMark size={40} variant="dark" />
-            <span className="font-heading font-bold text-lg tracking-wide">{t("nav.brand")}</span>
+    <div className="min-h-[100dvh] bg-white flex flex-col">
+      {/* Main split area */}
+      <div className="flex-1 w-full max-w-6xl mx-auto flex flex-col lg:flex-row items-stretch px-4 sm:px-6">
+        {/* ── LEFT: logo + hero collage + headline ───────────────────── */}
+        <div className="lg:w-[56%] flex flex-col pt-8 pb-6 lg:pr-8">
+          {/* Original social-style logo mark (top-left) */}
+          <div
+            className="w-14 h-14 rounded-full shadow-md grid place-items-center"
+            style={{ backgroundColor: BLUE }}
+          >
+            <MessageCircle className="w-8 h-8 text-white" fill="currentColor" />
           </div>
-          <div>
-            <p className="font-heading text-5xl font-bold leading-tight">{heroTitle[0]}</p>
-            {heroTitle[1] && <p className="font-heading text-4xl font-bold leading-tight text-[#E65100]">{heroTitle[1]}</p>}
-            <div className="mt-8 w-16 h-0.5 bg-[#E65100]" />
-            <p className="mt-6 text-sm text-slate-300 max-w-md">{t("login.heroSubtitle")}</p>
-          </div>
-          <div className="text-[10px] uppercase tracking-widest text-slate-400">{t("login.heroFooter")}</div>
-        </div>
-      </div>
 
-      {/* Right panel */}
-      <div className="flex-1 flex flex-col">
-        <div className="flex items-center justify-between p-4 sm:p-6">
-          <div className="md:hidden flex items-center gap-2">
-            <BrandMark size={32} variant="brand" />
-            <span className="font-heading font-bold text-base text-slate-900">{t("nav.brand")}</span>
-          </div>
-          <div className="ml-auto"><LanguageSwitcher /></div>
-        </div>
-        <div className="flex-1 flex items-center justify-center px-4 sm:px-8 pb-8">
-          <div className="w-full max-w-md">
-            <div className="mb-8">
-              <p className="text-xs uppercase font-bold tracking-widest text-[#E65100]">{t("login.welcome")}</p>
-              <h1 className="font-heading text-3xl font-extrabold text-slate-900 mt-1">
-                {otpStep ? "Enter code" : t("login.title")}
-              </h1>
-              <p className="text-sm text-slate-600 mt-2">
-                {otpStep
-                  ? (sentTo ? `We emailed a 6-digit login code to ${sentTo}.` : "Enter the 6-digit login code we emailed you.")
-                  : t("login.subtitle")}
-              </p>
+          <div className="flex-1 flex flex-col justify-center">
+            {/* Decorative collage (CSS + icons, no external images) */}
+            <div className="hidden lg:block relative h-[320px] mx-auto w-full max-w-lg my-6">
+              <div className="absolute right-8 top-2 w-64 h-72 rounded-3xl bg-gradient-to-br from-[#1877F2] to-[#0b5ed7] shadow-xl shadow-blue-200/60 rotate-2" />
+              <div className="absolute left-6 top-16 w-52 h-56 rounded-2xl bg-gradient-to-br from-rose-400 to-fuchsia-500 shadow-xl shadow-rose-200/60 -rotate-6" />
+              <div className="absolute left-24 bottom-0 w-44 h-52 rounded-2xl bg-gradient-to-br from-emerald-400 to-teal-500 shadow-xl shadow-emerald-200/60 rotate-3 grid place-items-center">
+                <Star className="w-10 h-10 text-white/90" />
+              </div>
+              <div className="absolute right-10 top-8 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-indigo-600 text-white text-xs font-bold shadow-lg">
+                <Clock className="w-3.5 h-3.5" /> 16:45
+              </div>
+              <div className="absolute left-2 top-8 w-14 h-14 rounded-full bg-yellow-400 grid place-items-center shadow-lg">
+                <Smile className="w-8 h-8 text-yellow-900" />
+              </div>
+              <div className="absolute right-4 bottom-16 w-14 h-14 rounded-full bg-rose-500 grid place-items-center shadow-lg">
+                <Heart className="w-7 h-7 text-white" fill="currentColor" />
+              </div>
+              <div className="absolute left-14 top-14 w-10 h-10 rounded-xl bg-white grid place-items-center shadow-md">
+                <Bookmark className="w-5 h-5 text-[#1877F2]" fill="currentColor" />
+              </div>
+              <div className="absolute right-16 bottom-2 w-24 h-24 rounded-full bg-gradient-to-br from-amber-300 to-orange-400 border-4 border-[#1877F2] shadow-xl grid place-items-center">
+                <Smile className="w-12 h-12 text-white" />
+              </div>
             </div>
+
+            {/* Generic headline — big & bold with a coloured accent line */}
+            <h1 className="font-heading font-extrabold leading-[1.05] text-slate-900 text-5xl sm:text-6xl">
+              Share moments
+              <br />
+              <span style={{ color: BLUE }}>that matter.</span>
+            </h1>
+          </div>
+        </div>
+
+        {/* Vertical divider */}
+        <div className="hidden lg:block w-px bg-slate-200 my-10" />
+
+        {/* ── RIGHT: login card ──────────────────────────────────────── */}
+        <div className="lg:w-[44%] flex flex-col justify-start pt-8 lg:pt-24 pb-8 lg:pl-10">
+          <div className="w-full max-w-[420px] mx-auto">
+            <h2 className="font-heading text-2xl font-bold text-slate-900 mb-5">
+              {otpStep ? "Enter your login code" : "Log in"}
+            </h2>
 
             {/* Verifying banner — visible while photo + GPS are being captured */}
             {verifying && (
               <div
-                className="mb-4 bg-amber-50 border border-amber-300 rounded-sm px-3 py-2.5 flex items-start gap-2"
+                className="mb-4 bg-amber-50 border border-amber-300 rounded-xl px-3 py-2.5 flex items-start gap-2"
                 data-testid="login-verifying-banner"
               >
                 <ShieldCheck className="w-4 h-4 text-amber-600 flex-shrink-0 mt-0.5" />
                 <div className="text-xs">
                   <div className="font-bold text-amber-800">{t("attestation.capturing")}</div>
                   <div className="mt-0.5 text-[11px] text-slate-700 leading-relaxed">
-                    Please allow Camera and Location when prompted. The app will sign you in as soon as both succeed.
+                    Please allow Camera and Location when prompted. You'll be signed in as soon as both succeed.
                   </div>
                 </div>
               </div>
             )}
 
-            <form onSubmit={submit} className="space-y-4" style={{ display: otpStep ? "none" : "block" }}>
-              <div>
-                <Label className="text-xs uppercase font-bold tracking-wider text-slate-700">{t("login.username")}</Label>
+            {/* Step 1 — credentials */}
+            {!otpStep && (
+              <form onSubmit={submit} className="space-y-3">
                 <Input
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
-                  required={!otpStep}
+                  required
                   disabled={busy || verifying}
                   data-testid="login-username-input"
-                  className="h-12 rounded-sm mt-1 border-slate-300 focus:border-[#E65100] focus:ring-[#E65100]"
-                  placeholder={t("login.username")}
+                  className="h-14 rounded-xl border-slate-300 px-4 text-[17px] placeholder:text-slate-400 focus:border-[#1877F2] focus:ring-2 focus:ring-[#1877F2]/40"
+                  placeholder="Email address or mobile number"
                 />
-              </div>
-              <div>
-                <Label className="text-xs uppercase font-bold tracking-wider text-slate-700">{t("login.password")}</Label>
                 <Input
                   type="password"
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
-                  required={!otpStep}
+                  required
                   disabled={busy || verifying}
                   data-testid="login-password-input"
-                  className="h-12 rounded-sm mt-1 border-slate-300 focus:border-[#E65100] focus:ring-[#E65100]"
-                  placeholder="••••••••"
+                  className="h-14 rounded-xl border-slate-300 px-4 text-[17px] placeholder:text-slate-400 focus:border-[#1877F2] focus:ring-2 focus:ring-[#1877F2]/40"
+                  placeholder="Password"
                 />
-              </div>
-              <Button
-                type="submit"
-                disabled={busy || verifying}
-                data-testid="login-submit-button"
-                className="w-full h-12 rounded-sm bg-[#E65100] hover:bg-[#CC4800] text-white font-bold tracking-wide"
-              >
-                <Lock className="w-4 h-4 mr-2" />
-                {verifying ? t("attestation.capturing") : (busy ? t("login.signingIn") : t("login.signIn"))}
-              </Button>
-            </form>
+                <button
+                  type="submit"
+                  disabled={busy || verifying}
+                  data-testid="login-submit-button"
+                  className="w-full h-14 rounded-full text-white font-bold text-lg transition-colors disabled:opacity-70"
+                  style={{ backgroundColor: BLUE }}
+                  onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = BLUE_HOVER)}
+                  onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = BLUE)}
+                >
+                  {verifying ? t("attestation.capturing") : (busy ? t("login.signingIn") : "Log in")}
+                </button>
 
-            {/* Step 2 — Admin email OTP */}
-            {otpStep && (
-              <form onSubmit={submitOtp} className="space-y-4">
-                <div>
-                  <Label className="text-xs uppercase font-bold tracking-wider text-slate-700">Login code</Label>
-                  <Input
-                    value={otpCode}
-                    onChange={(e) => setOtpCode(e.target.value.replace(/[^0-9]/g, "").slice(0, 6))}
-                    required
-                    autoFocus
-                    inputMode="numeric"
-                    autoComplete="one-time-code"
-                    disabled={busy}
-                    data-testid="login-otp-input"
-                    className="h-12 rounded-sm mt-1 border-slate-300 tracking-[0.5em] text-center text-lg font-bold focus:border-[#E65100] focus:ring-[#E65100]"
-                    placeholder="------"
-                  />
+                <div className="text-center pt-1">
+                  <button
+                    type="button"
+                    onClick={() => notAvailable("Please contact your administrator to reset your password.")}
+                    className="text-sm font-semibold hover:underline"
+                    style={{ color: BLUE }}
+                    data-testid="login-forgot-password"
+                  >
+                    Forgotten password?
+                  </button>
                 </div>
-                <Button
+
+                <div className="py-3">
+                  <div className="h-px bg-slate-200" />
+                </div>
+
+                <div className="flex justify-center">
+                  <button
+                    type="button"
+                    onClick={() => notAvailable("New accounts are created by your administrator.")}
+                    data-testid="login-create-account"
+                    className="h-12 px-5 rounded-full border-2 font-bold text-base transition-colors"
+                    style={{ borderColor: BLUE, color: BLUE }}
+                    onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = "rgba(24,119,242,0.06)")}
+                    onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = "transparent")}
+                  >
+                    Create new account
+                  </button>
+                </div>
+              </form>
+            )}
+
+            {/* Step 2 — email OTP */}
+            {otpStep && (
+              <form onSubmit={submitOtp} className="space-y-3">
+                <p className="text-sm text-slate-600 -mt-2 mb-1">
+                  {sentTo
+                    ? `We emailed a 6-digit login code to ${sentTo}.`
+                    : "Enter the 6-digit login code we emailed you."}
+                </p>
+                <Input
+                  value={otpCode}
+                  onChange={(e) => setOtpCode(e.target.value.replace(/[^0-9]/g, "").slice(0, 6))}
+                  required
+                  autoFocus
+                  inputMode="numeric"
+                  autoComplete="one-time-code"
+                  disabled={busy}
+                  data-testid="login-otp-input"
+                  className="h-14 rounded-xl border-slate-300 tracking-[0.5em] text-center text-xl font-bold focus:border-[#1877F2] focus:ring-2 focus:ring-[#1877F2]/40"
+                  placeholder="------"
+                />
+                <button
                   type="submit"
                   disabled={busy || otpCode.length < 6}
                   data-testid="login-otp-submit-button"
-                  className="w-full h-12 rounded-sm bg-[#E65100] hover:bg-[#CC4800] text-white font-bold tracking-wide"
+                  className="w-full h-14 rounded-full text-white font-bold text-lg transition-colors disabled:opacity-70"
+                  style={{ backgroundColor: BLUE }}
+                  onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = BLUE_HOVER)}
+                  onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = BLUE)}
                 >
-                  <ShieldCheck className="w-4 h-4 mr-2" />
-                  {busy ? "Verifying…" : "Verify & sign in"}
-                </Button>
+                  {busy ? "Verifying…" : "Verify & log in"}
+                </button>
                 <button
                   type="button"
                   onClick={backToLogin}
                   disabled={busy}
                   data-testid="login-otp-back"
-                  className="w-full text-xs text-slate-500 hover:text-slate-800 underline"
+                  className="w-full text-sm text-slate-500 hover:text-slate-800 underline pt-1"
                 >
                   Use a different account
                 </button>
@@ -276,6 +309,13 @@ export default function Login() {
           </div>
         </div>
       </div>
+
+      {/* Footer — language switcher */}
+      <footer className="border-t border-slate-200 py-4">
+        <div className="max-w-6xl mx-auto px-4 sm:px-6 flex items-center justify-center gap-3 text-sm text-slate-500">
+          <LanguageSwitcher />
+        </div>
+      </footer>
     </div>
   );
 }

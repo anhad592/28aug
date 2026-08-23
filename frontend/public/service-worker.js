@@ -15,7 +15,7 @@
  *   On logout the SPA posts {type:"jk-logout"} which clears all caches
  *   so the next user starts with a clean slate.
  */
-const CACHE_VERSION = "jk-factory-v22-brandmark-local";
+const CACHE_VERSION = "facedook-v23-icons";
 const SHELL_CACHE = `${CACHE_VERSION}-shell`;
 const STATIC_CACHE = `${CACHE_VERSION}-static`;
 
