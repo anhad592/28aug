@@ -27,7 +27,9 @@ function groupItemsByProduct(items) {
 }
 
 export default function Products() {
-  const { isAdmin } = useAuth();
+  const { isAdmin, canAct } = useAuth();
+  const canEditProducts = canAct("edit:products");
+  const canDeleteProducts = canAct("delete:products");
   const { t } = useTranslation();
   const [products, setProducts] = useState([]);
   const [items, setItems] = useState([]);
@@ -361,18 +363,22 @@ export default function Products() {
                        </div>
                      </div>
                    </div>
-                   {isAdmin && (
+                   {(canEditProducts || canDeleteProducts) && (
                      <div className="flex items-center gap-2 shrink-0" onClick={(e) => e.stopPropagation()}>
+                       {canEditProducts && (
                        <Button size="sm" variant="outline" onClick={() => openEdit(p)}
                                data-testid={`edit-product-${p.name}`}
                                className="rounded-sm border-slate-300">
                          <Edit3 className="w-3.5 h-3.5 mr-1" /> {t("common.edit")}
                        </Button>
+                       )}
+                       {canDeleteProducts && (
                        <Button size="sm" variant="outline" onClick={() => removeProduct(p)}
                                data-testid={`delete-product-${p.name}`}
                                className="rounded-sm border-rose-200 text-rose-600 hover:bg-rose-50 hover:text-rose-700">
                          <Trash2 className="w-3.5 h-3.5" />
                        </Button>
+                       )}
                      </div>
                    )}
                  </div>
@@ -436,13 +442,13 @@ export default function Products() {
                                  <Button
                                    size="sm"
                                    onClick={() => saveItemBag(it)}
-                                   disabled={savingItem === it.id || !isDirty}
+                                   disabled={savingItem === it.id || !isDirty || !canEditProducts}
                                    data-testid={`sku-save-${it.id}`}
                                    className="h-8 rounded-sm bg-[#E65100] hover:bg-[#CC4800] text-white text-xs px-3 disabled:opacity-40">
                                    <Save className="w-3.5 h-3.5 mr-1" />
                                    {t("common.save")}
                                  </Button>
-                                 {(hasOverride || isDirty) && (
+                                 {canEditProducts && (hasOverride || isDirty) && (
                                    <Button
                                      size="sm"
                                      variant="outline"
@@ -454,8 +460,9 @@ export default function Products() {
                                      <RotateCcw className="w-3.5 h-3.5" />
                                    </Button>
                                  )}
-                                 {isAdmin && (
+                                 {(canEditProducts || canDeleteProducts) && (
                                    <>
+                                     {canEditProducts && (
                                      <Button
                                        size="sm"
                                        variant="outline"
@@ -465,6 +472,8 @@ export default function Products() {
                                        className="h-8 rounded-sm border-orange-200 text-[#E65100] hover:bg-orange-50 text-xs px-2">
                                        <Beaker className="w-3.5 h-3.5 mr-1" /> BOM
                                      </Button>
+                                     )}
+                                     {canEditProducts && (
                                      <Button
                                        size="sm"
                                        variant="outline"
@@ -474,6 +483,8 @@ export default function Products() {
                                        className="h-8 rounded-sm border-slate-300 text-xs px-2">
                                        <Edit3 className="w-3.5 h-3.5" />
                                      </Button>
+                                     )}
+                                     {canDeleteProducts && (
                                      <Button
                                        size="sm"
                                        variant="outline"
@@ -483,6 +494,7 @@ export default function Products() {
                                        className="h-8 rounded-sm border-rose-200 text-rose-600 hover:bg-rose-50 hover:text-rose-700 text-xs px-2">
                                        <Trash2 className="w-3.5 h-3.5" />
                                      </Button>
+                                     )}
                                    </>
                                  )}
                                </div>

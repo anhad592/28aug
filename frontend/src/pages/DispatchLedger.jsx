@@ -184,7 +184,7 @@ function PartyCombobox({ customers, value, onChange, t }) {
 
 export default function DispatchLedger() {
   const { t } = useTranslation();
-  const { isAdmin } = useAuth();
+  const { isAdmin, canAct } = useAuth();
   const [loading, setLoading] = useState(false);
   const [dispatches, setDispatches] = useState([]);
   const [payments, setPayments] = useState([]);
@@ -1329,16 +1329,29 @@ export default function DispatchLedger() {
             </DialogDescription>
           </DialogHeader>
           <div className="grid grid-cols-2 gap-3 pt-2">
-            <Button onClick={handleActionEdit} data-testid="action-edit-btn"
-                    className="bg-[#E65100] hover:bg-[#CC4800] text-white rounded-sm h-12 font-bold text-base">
-              <Pencil className="w-4 h-4 mr-2" /> {t("ledger.rowEdit")}
-            </Button>
-            <Button onClick={handleActionDelete} data-testid="action-delete-btn"
-                    disabled={!isAdmin}
-                    title={!isAdmin ? "Admin only" : undefined}
-                    className="bg-rose-700 hover:bg-rose-800 text-white disabled:opacity-50 disabled:cursor-not-allowed rounded-sm h-12 font-bold text-base">
-              <Trash2 className="w-4 h-4 mr-2" /> {t("ledger.rowDelete")}
-            </Button>
+            {(() => {
+              const mod = actionRow
+                ? (actionRow.kind === "dispatch" ? "dispatch" : "customerLedger")
+                : null;
+              const canEditRow = mod ? canAct(`edit:${mod}`) : false;
+              const canDeleteRow = mod ? canAct(`delete:${mod}`) : false;
+              return (
+                <>
+                  <Button onClick={handleActionEdit} data-testid="action-edit-btn"
+                          disabled={!canEditRow}
+                          title={!canEditRow ? "You don't have edit access here" : undefined}
+                          className="bg-[#E65100] hover:bg-[#CC4800] text-white disabled:opacity-50 disabled:cursor-not-allowed rounded-sm h-12 font-bold text-base">
+                    <Pencil className="w-4 h-4 mr-2" /> {t("ledger.rowEdit")}
+                  </Button>
+                  <Button onClick={handleActionDelete} data-testid="action-delete-btn"
+                          disabled={!canDeleteRow}
+                          title={!canDeleteRow ? "You don't have delete access here" : undefined}
+                          className="bg-rose-700 hover:bg-rose-800 text-white disabled:opacity-50 disabled:cursor-not-allowed rounded-sm h-12 font-bold text-base">
+                    <Trash2 className="w-4 h-4 mr-2" /> {t("ledger.rowDelete")}
+                  </Button>
+                </>
+              );
+            })()}
           </div>
         </DialogContent>
       </Dialog>

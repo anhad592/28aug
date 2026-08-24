@@ -32,12 +32,17 @@ function Protected({ children, adminOnly = false, permKey = null, permKeys = nul
   const location = useLocation();
   if (loading) return <div className="p-10 text-center text-slate-500">Loading…</div>;
   if (!user) return <Navigate to="/login" replace state={{ from: location }} />;
-  // Admins bypass everything.
-  if (isAdmin) return children;
+  const keys = permKeys || (permKey ? [permKey] : []);
+  // Admins bypass everything EXCEPT explicit hard-denials (e.g. the JK1 demo
+  // account is blocked from the Users page). When a route declares keys and
+  // the user is denied ALL of them, redirect even for admins.
+  if (isAdmin) {
+    if (keys.length && !keys.some((k) => can(k))) return <Navigate to="/" replace />;
+    return children;
+  }
   // Accept access if ANY of the supplied keys is granted (permKeys) or the
   // single permKey is granted. An explicit grant OVERRIDES the route's
   // `adminOnly` default — otherwise the admin's grant has no visible effect.
-  const keys = permKeys || (permKey ? [permKey] : []);
   if (keys.length && keys.some((k) => can(k))) return children;
   if (adminOnly) return <Navigate to="/" replace />;
   if (keys.length) return <Navigate to="/" replace />;

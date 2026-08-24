@@ -332,6 +332,29 @@ DEFAULT_USER_PERMISSIONS: List[str] = [
     "customers", "products",
 ]
 
+# ---- Action (edit / delete) permission keys ----------------------------
+# Fine-grained grants, kept SEPARATE for edit vs delete, one pair per module.
+# An admin can give or take these away from any user via Admin → Users →
+# Access. Stored in the SAME `permissions` array as nav keys; the distinct
+# `edit:` / `delete:` prefixes keep them from colliding with view/nav keys.
+# Non-admins have NONE by default (view-only) — must be granted explicitly.
+# Admins always have all of them.
+ACTION_PERMISSION_KEYS: List[str] = [
+    "edit:customers", "delete:customers",
+    "edit:products", "delete:products",
+    "edit:rawMaterials", "delete:rawMaterials",
+    "edit:suppliers", "delete:suppliers",
+    "edit:vendorLedger", "delete:vendorLedger",
+    "edit:customerLedger", "delete:customerLedger",
+    "edit:orders", "delete:orders",
+    "edit:dispatch", "delete:dispatch",
+    "edit:priceLists", "delete:priceLists",
+    "edit:vendorPriceLists", "delete:vendorPriceLists",
+]
+
+# Everything an admin may grant / revoke (nav access + edit/delete actions).
+ALL_GRANTABLE_KEYS: List[str] = ALL_PERMISSION_KEYS + ACTION_PERMISSION_KEYS
+
 
 class SettingsUpdate(BaseModel):
     overdue_days: Optional[int] = None
@@ -537,6 +560,45 @@ async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(s
 def require_admin(user: Dict[str, Any] = Depends(get_current_user)) -> Dict[str, Any]:
     if user.get("role") != "admin":
         raise HTTPException(status_code=403, detail="Admin access required")
+    return user
+
+
+def has_action_permission(user: Dict[str, Any], action_key: str) -> bool:
+    """True if the user may perform the given edit/delete action.
+    Admins always may. Non-admins only if the action key was explicitly
+    granted (stored in their `permissions` array)."""
+    if not user:
+        return False
+    if user.get("role") == "admin":
+        return True
+    perms = user.get("permissions")
+    return isinstance(perms, list) and action_key in perms
+
+
+def require_action(action_key: str):
+    """Dependency factory that gates an edit/delete endpoint behind a
+    fine-grained action permission. Keeps the injected value name-compatible
+    with existing handlers (returns the current user dict)."""
+    async def _dep(user: Dict[str, Any] = Depends(get_current_user)) -> Dict[str, Any]:
+        if not has_action_permission(user, action_key):
+            raise HTTPException(
+                status_code=403,
+                detail="You don't have permission to edit or delete here. Ask an admin to grant access.",
+            )
+        return user
+    return _dep
+
+
+# Demo accounts (e.g. JK1) carry the admin role but must NOT be able to view
+# or manage the user list. This guard blocks them from the /users endpoints
+# while leaving the rest of the admin surface untouched.
+DEMO_USERNAMES = {"JK1"}
+
+
+def require_users_admin(user: Dict[str, Any] = Depends(require_admin)) -> Dict[str, Any]:
+    uname = str(user.get("username") or "").strip().upper()
+    if uname in {u.upper() for u in DEMO_USERNAMES}:
+        raise HTTPException(status_code=403, detail="Not permitted for this account")
     return user
 
 
@@ -786,13 +848,13 @@ async def me(user=Depends(get_current_user)):
 
 # ======================== Admin: User Management ========================
 @api_router.get("/users")
-async def list_users(admin=Depends(require_admin)):
+async def list_users(admin=Depends(require_users_admin)):
     users = await db.users.find({}, {"_id": 0, "password": 0}).sort("created_at", 1).to_list(500)
     return users
 
 
 @api_router.post("/users")
-async def create_user(body: AdminUserCreate, admin=Depends(require_admin)):
+async def create_user(body: AdminUserCreate, admin=Depends(require_users_admin)):
     if body.role not in ("admin", "user"):
         raise HTTPException(status_code=400, detail="role must be 'admin' or 'user'")
     email = body.email.lower()
@@ -819,16 +881,16 @@ async def create_user(body: AdminUserCreate, admin=Depends(require_admin)):
     }
     # Optional explicit permission allowlist (validated against the catalog).
     if body.permissions is not None:
-        invalid = sorted({p for p in body.permissions if p not in ALL_PERMISSION_KEYS})
+        invalid = sorted({p for p in body.permissions if p not in ALL_GRANTABLE_KEYS})
         if invalid:
             raise HTTPException(status_code=400, detail=f"Invalid permission keys: {invalid}")
-        doc["permissions"] = [k for k in ALL_PERMISSION_KEYS if k in set(body.permissions)]
+        doc["permissions"] = [k for k in ALL_GRANTABLE_KEYS if k in set(body.permissions)]
     await db.users.insert_one(doc)
     return {"id": doc["id"], "email": doc["email"], "username": doc["username"], "name": doc["name"], "role": doc["role"], "otp_login": doc["otp_login"], "permissions": doc.get("permissions"), "created_at": doc["created_at"]}
 
 
 @api_router.patch("/users/{uid}/otp")
-async def set_user_otp(uid: str, body: UserOtpUpdate, admin=Depends(require_admin)):
+async def set_user_otp(uid: str, body: UserOtpUpdate, admin=Depends(require_users_admin)):
     """Admin toggles email-OTP two-step login ON/OFF for any user."""
     res = await db.users.update_one(
         {"id": uid},
@@ -841,7 +903,7 @@ async def set_user_otp(uid: str, body: UserOtpUpdate, admin=Depends(require_admi
 
 
 @api_router.delete("/users/{uid}")
-async def delete_user(uid: str, admin=Depends(require_admin)):
+async def delete_user(uid: str, admin=Depends(require_users_admin)):
     if uid == admin["id"]:
         raise HTTPException(status_code=400, detail="You cannot delete your own account")
     res = await db.users.delete_one({"id": uid})
@@ -851,7 +913,7 @@ async def delete_user(uid: str, admin=Depends(require_admin)):
 
 
 @api_router.post("/users/{uid}/reset-password")
-async def reset_user_password(uid: str, body: AdminPasswordReset, admin=Depends(require_admin)):
+async def reset_user_password(uid: str, body: AdminPasswordReset, admin=Depends(require_users_admin)):
     if len(body.password) < 6:
         raise HTTPException(status_code=400, detail="Password must be at least 6 characters")
     res = await db.users.update_one(
@@ -867,11 +929,15 @@ async def reset_user_password(uid: str, body: AdminPasswordReset, admin=Depends(
 async def permissions_catalog(admin=Depends(require_admin)):
     """All grantable nav keys + the default allowlist for non-admin users.
     The Admin Users page reads this to render the access matrix."""
-    return {"all": ALL_PERMISSION_KEYS, "default_user": DEFAULT_USER_PERMISSIONS}
+    return {
+        "all": ALL_PERMISSION_KEYS,
+        "default_user": DEFAULT_USER_PERMISSIONS,
+        "actions": ACTION_PERMISSION_KEYS,
+    }
 
 
 @api_router.patch("/users/{uid}/permissions")
-async def set_user_permissions(uid: str, body: UserPermissionsUpdate, admin=Depends(require_admin)):
+async def set_user_permissions(uid: str, body: UserPermissionsUpdate, admin=Depends(require_users_admin)):
     """Admin sets a user's explicit nav-key allowlist.
     - Passing `permissions: null` clears the override and falls back to role defaults.
     - Passing an empty list `[]` locks the user out of every nav item.
@@ -883,11 +949,11 @@ async def set_user_permissions(uid: str, body: UserPermissionsUpdate, admin=Depe
     when / before-after / added / removed) so the trail survives across admins.
     """
     if body.permissions is not None:
-        invalid = sorted({p for p in body.permissions if p not in ALL_PERMISSION_KEYS})
+        invalid = sorted({p for p in body.permissions if p not in ALL_GRANTABLE_KEYS})
         if invalid:
             raise HTTPException(status_code=400, detail=f"Invalid permission keys: {invalid}")
         # Dedupe + preserve catalog order for stable storage
-        ordered = [k for k in ALL_PERMISSION_KEYS if k in set(body.permissions)]
+        ordered = [k for k in ALL_GRANTABLE_KEYS if k in set(body.permissions)]
     else:
         ordered = None
     # Snapshot the previous state so we can diff and audit
@@ -1046,7 +1112,7 @@ async def create_product(body: ProductIn, user=Depends(require_admin)):
 
 
 @api_router.patch("/products/{pid}")
-async def update_product(pid: str, body: ProductUpdate, user=Depends(require_admin)):
+async def update_product(pid: str, body: ProductUpdate, user=Depends(require_action("edit:products"))):
     update = {k: v for k, v in body.model_dump().items() if v is not None}
     if not update:
         raise HTTPException(status_code=400, detail="No fields to update")
@@ -1066,7 +1132,7 @@ async def update_product(pid: str, body: ProductUpdate, user=Depends(require_adm
 
 
 @api_router.delete("/products/{pid}")
-async def delete_product(pid: str, user=Depends(require_admin)):
+async def delete_product(pid: str, user=Depends(require_action("delete:products"))):
     prod = await db.products.find_one({"id": pid})
     if not prod:
         raise HTTPException(status_code=404, detail="Product not found")
@@ -1176,7 +1242,7 @@ async def create_item(body: ItemCreate, admin=Depends(require_admin)):
 
 
 @api_router.patch("/items/{iid}")
-async def update_item(iid: str, body: ItemEdit, user=Depends(require_admin)):
+async def update_item(iid: str, body: ItemEdit, user=Depends(require_action("edit:products"))):
     """Admin: update an item SKU. Accepts any subset of name / product_id /
     bag-override fields. Preserves prior behaviour: passing only min_per_bag +
     max_per_bag still sets the bag override unchanged."""
@@ -1214,7 +1280,7 @@ async def update_item(iid: str, body: ItemEdit, user=Depends(require_admin)):
 
 
 @api_router.delete("/items/{iid}")
-async def delete_item(iid: str, admin=Depends(require_admin)):
+async def delete_item(iid: str, admin=Depends(require_action("delete:products"))):
     """Admin: delete an item SKU. Blocked if any order line references it."""
     existing = await db.items.find_one({"id": iid}, {"_id": 0})
     if not existing:
@@ -1227,7 +1293,7 @@ async def delete_item(iid: str, admin=Depends(require_admin)):
 
 
 @api_router.delete("/items/{iid}/bag-override")
-async def clear_item_bag_override(iid: str, user=Depends(require_admin)):
+async def clear_item_bag_override(iid: str, user=Depends(require_action("edit:products"))):
     """Remove the per-SKU bag override so the item falls back to its master
     product's bag limits."""
     existing = await db.items.find_one({"id": iid}, {"_id": 0})
@@ -1282,7 +1348,7 @@ async def create_customer(body: CustomerIn, user=Depends(require_admin)):
 
 
 @api_router.patch("/customers/{cid}")
-async def update_customer(cid: str, body: CustomerUpdate, user=Depends(get_current_user)):
+async def update_customer(cid: str, body: CustomerUpdate, user=Depends(require_action("edit:customers"))):
     update = {k: v for k, v in body.model_dump().items() if v is not None}
     # Non-admin users can update preferences + the operational labels they
     # actually use on the dispatch floor (private mark, transport). Other
@@ -1342,7 +1408,7 @@ async def get_customer_blocked_items(cid: str, user=Depends(get_current_user)):
 
 
 @api_router.put("/customers/{cid}/blocked-items")
-async def set_customer_blocked_items(cid: str, body: BlockedItemsIn, admin=Depends(require_admin)):
+async def set_customer_blocked_items(cid: str, body: BlockedItemsIn, admin=Depends(require_action("edit:customers"))):
     """Admin: replace the full list of blocked item_ids for this party.
     Any SKUs in this list will never appear in the item search dropdown
     for this customer and cannot be placed on a new order or dispatch.
@@ -1374,7 +1440,7 @@ async def set_customer_blocked_items(cid: str, body: BlockedItemsIn, admin=Depen
 
 
 @api_router.delete("/customers/{cid}")
-async def delete_customer(cid: str, admin=Depends(require_admin)):
+async def delete_customer(cid: str, admin=Depends(require_action("delete:customers"))):
     """Admin: delete a customer. Blocked if any order references this party."""
     existing = await db.customers.find_one({"id": cid}, {"_id": 0})
     if not existing:
@@ -1387,7 +1453,7 @@ async def delete_customer(cid: str, admin=Depends(require_admin)):
 
 
 @api_router.post("/customers/bulk-delete")
-async def bulk_delete_customers(body: CustomerBulkDeleteIn, admin=Depends(require_admin)):
+async def bulk_delete_customers(body: CustomerBulkDeleteIn, admin=Depends(require_action("delete:customers"))):
     """Admin: delete many customers in a single call. The whole call is
     rejected if any of the supplied ids are referenced by an order — the
     response lists the blocking parties so the operator can review."""
@@ -1782,7 +1848,7 @@ async def list_orders(status_filter: Optional[str] = None, user=Depends(get_curr
 
 
 @api_router.patch("/orders/{oid}/status")
-async def update_order_status(oid: str, body: OrderStatusUpdate, user=Depends(get_current_user)):
+async def update_order_status(oid: str, body: OrderStatusUpdate, user=Depends(require_action("edit:orders"))):
     if body.status not in ("Pending", "Dispatched", "Cleared"):
         raise HTTPException(status_code=400, detail="Invalid status")
     res = await db.orders.update_one({"id": oid}, {"$set": {"status": body.status, "updated_at": now_iso()}})
@@ -1792,7 +1858,7 @@ async def update_order_status(oid: str, body: OrderStatusUpdate, user=Depends(ge
 
 
 @api_router.patch("/orders/{oid}")
-async def admin_update_order(oid: str, body: OrderUpdate, admin=Depends(require_admin)):
+async def admin_update_order(oid: str, body: OrderUpdate, admin=Depends(require_action("edit:orders"))):
     """Admin-only full edit of an order: customer, items, dates, notes, status."""
     existing = await db.orders.find_one({"id": oid}, {"_id": 0})
     if not existing:
@@ -1832,7 +1898,7 @@ async def admin_update_order(oid: str, body: OrderUpdate, admin=Depends(require_
 
 
 @api_router.delete("/orders/{oid}")
-async def delete_order(oid: str, user=Depends(require_admin)):
+async def delete_order(oid: str, user=Depends(require_action("delete:orders"))):
     res = await db.orders.delete_one({"id": oid})
     if res.deleted_count == 0:
         raise HTTPException(status_code=404, detail="Order not found")
@@ -2573,7 +2639,7 @@ async def admin_dispatch_ledger(
 
 
 @api_router.patch("/dispatches/{did}/gr")
-async def update_dispatch_gr(did: str, body: DispatchGrUpdate, user=Depends(get_current_user)):
+async def update_dispatch_gr(did: str, body: DispatchGrUpdate, user=Depends(require_action("edit:dispatch"))):
     """Set / update the GR (Goods Receipt) number for a dispatch.
     Any authenticated user can edit this field (per product spec)."""
     gr = (body.gr_number or "").strip()
@@ -2629,7 +2695,7 @@ class DispatchEdit(BaseModel):
 
 
 @api_router.patch("/dispatches/{did}")
-async def update_dispatch(did: str, body: DispatchEdit, user=Depends(get_current_user)):
+async def update_dispatch(did: str, body: DispatchEdit, user=Depends(require_action("edit:dispatch"))):
     """Edit a dispatch's bookkeeping fields (GR, transport, notes, bill
     amount, bag count) and optionally its line items (name / qty / price).
 
@@ -2812,7 +2878,7 @@ async def update_dispatch(did: str, body: DispatchEdit, user=Depends(get_current
 
 
 @api_router.delete("/dispatches/{did}")
-async def delete_dispatch(did: str, admin=Depends(require_admin)):
+async def delete_dispatch(did: str, admin=Depends(require_action("delete:dispatch"))):
     """Delete a dispatch record (admin only) and rebalance the customer's
     parent order(s) + raw-material stock so the system stays consistent.
 
@@ -3270,7 +3336,7 @@ async def create_price_list(body: PriceListIn, admin=Depends(require_admin)):
 
 
 @api_router.patch("/price-lists/{plid}")
-async def update_price_list(plid: str, body: PriceListUpdate, admin=Depends(require_admin)):
+async def update_price_list(plid: str, body: PriceListUpdate, admin=Depends(require_action("edit:priceLists"))):
     update = {k: v for k, v in body.model_dump().items() if v is not None}
     if not update:
         raise HTTPException(status_code=400, detail="No fields to update")
@@ -3284,7 +3350,7 @@ async def update_price_list(plid: str, body: PriceListUpdate, admin=Depends(requ
 
 
 @api_router.delete("/price-lists/{plid}")
-async def delete_price_list(plid: str, admin=Depends(require_admin)):
+async def delete_price_list(plid: str, admin=Depends(require_action("delete:priceLists"))):
     existing = await db.price_lists.find_one({"id": plid}, {"_id": 0})
     if not existing:
         raise HTTPException(status_code=404, detail="Price list not found")
@@ -5353,7 +5419,7 @@ async def list_payments(
 
 
 @api_router.patch("/payments/{pid}")
-async def update_payment(pid: str, body: PaymentUpdate, user=Depends(get_current_user)):
+async def update_payment(pid: str, body: PaymentUpdate, user=Depends(require_action("edit:customerLedger"))):
     existing = await db.payments.find_one({"id": pid}, {"_id": 0})
     if not existing:
         raise HTTPException(status_code=404, detail="Payment not found")
@@ -5376,7 +5442,7 @@ async def update_payment(pid: str, body: PaymentUpdate, user=Depends(get_current
 
 
 @api_router.delete("/payments/{pid}")
-async def delete_payment(pid: str, admin=Depends(require_admin)):
+async def delete_payment(pid: str, admin=Depends(require_action("delete:customerLedger"))):
     # Cascade-remove the mirrored supplier_payment (if this was an on-behalf
     # payment) so the supplier ledger stays in sync.
     await db.supplier_payments.delete_many({"customer_payment_id": pid})
@@ -5432,7 +5498,7 @@ async def create_raw_material(body: RawMaterialIn, admin=Depends(require_admin))
 
 
 @api_router.patch("/raw-materials/{rid}")
-async def update_raw_material(rid: str, body: RawMaterialUpdate, admin=Depends(require_admin)):
+async def update_raw_material(rid: str, body: RawMaterialUpdate, admin=Depends(require_action("edit:rawMaterials"))):
     upd: Dict[str, Any] = {"updated_at": now_iso(), "updated_by": admin["email"]}
     if body.name is not None:
         upd["name"] = body.name.strip()
@@ -5449,7 +5515,7 @@ async def update_raw_material(rid: str, body: RawMaterialUpdate, admin=Depends(r
 
 
 @api_router.delete("/raw-materials/{rid}")
-async def delete_raw_material(rid: str, admin=Depends(require_admin)):
+async def delete_raw_material(rid: str, admin=Depends(require_action("delete:rawMaterials"))):
     res = await db.raw_materials.delete_one({"id": rid})
     if res.deleted_count == 0:
         raise HTTPException(status_code=404, detail="Raw material not found")
@@ -5536,7 +5602,7 @@ async def get_vendor_price_list(vpl_id: str, user=Depends(get_current_user)):
 
 
 @api_router.patch("/vendor-price-lists/{vpl_id}")
-async def update_vendor_price_list(vpl_id: str, body: VendorPriceListUpdate, admin=Depends(require_admin)):
+async def update_vendor_price_list(vpl_id: str, body: VendorPriceListUpdate, admin=Depends(require_action("edit:vendorPriceLists"))):
     upd: Dict[str, Any] = {"updated_at": now_iso(), "updated_by": admin["email"]}
     if body.name is not None:
         n = body.name.strip()
@@ -5558,7 +5624,7 @@ async def update_vendor_price_list(vpl_id: str, body: VendorPriceListUpdate, adm
 
 
 @api_router.delete("/vendor-price-lists/{vpl_id}")
-async def delete_vendor_price_list(vpl_id: str, admin=Depends(require_admin)):
+async def delete_vendor_price_list(vpl_id: str, admin=Depends(require_action("delete:vendorPriceLists"))):
     res = await db.vendor_price_lists.delete_one({"id": vpl_id})
     if res.deleted_count == 0:
         raise HTTPException(status_code=404, detail="Vendor price list not found")
@@ -5623,7 +5689,7 @@ async def _ensure_raw_material(name: str, unit: str, price: float, admin: Dict[s
 
 @api_router.patch("/vendor-price-lists/{vpl_id}/items/{vpi_id}")
 async def update_vendor_price_list_item(
-    vpl_id: str, vpi_id: str, body: VendorPriceListItemUpdate, admin=Depends(require_admin)
+    vpl_id: str, vpi_id: str, body: VendorPriceListItemUpdate, admin=Depends(require_action("edit:vendorPriceLists"))
 ):
     upd: Dict[str, Any] = {"updated_at": now_iso()}
     if body.name is not None:
@@ -5656,7 +5722,7 @@ async def update_vendor_price_list_item(
 
 
 @api_router.delete("/vendor-price-lists/{vpl_id}/items/{vpi_id}")
-async def delete_vendor_price_list_item(vpl_id: str, vpi_id: str, admin=Depends(require_admin)):
+async def delete_vendor_price_list_item(vpl_id: str, vpi_id: str, admin=Depends(require_action("delete:vendorPriceLists"))):
     res = await db.vendor_price_list_items.delete_one(
         {"id": vpi_id, "vendor_price_list_id": vpl_id}
     )
@@ -5940,7 +6006,7 @@ async def get_supplier(sid: str, user=Depends(get_current_user)):
 
 
 @api_router.patch("/suppliers/{sid}")
-async def update_supplier(sid: str, body: SupplierUpdate, admin=Depends(require_admin)):
+async def update_supplier(sid: str, body: SupplierUpdate, admin=Depends(require_action("edit:suppliers"))):
     upd: Dict[str, Any] = {"updated_at": now_iso(), "updated_by": admin["email"]}
     for field in ("name", "phone", "address", "city", "gst_number",
                   "contact_person", "material_category", "notes"):
@@ -5956,7 +6022,7 @@ async def update_supplier(sid: str, body: SupplierUpdate, admin=Depends(require_
 
 
 @api_router.delete("/suppliers/{sid}")
-async def delete_supplier(sid: str, admin=Depends(require_admin)):
+async def delete_supplier(sid: str, admin=Depends(require_action("delete:suppliers"))):
     # Refuse if there are linked purchases or payments
     if await db.supplier_purchases.find_one({"supplier_id": sid}, {"_id": 1}):
         raise HTTPException(status_code=400, detail="Cannot delete supplier with purchase history")
@@ -6081,7 +6147,7 @@ async def create_supplier_purchase(body: SupplierPurchaseIn, user=Depends(get_cu
 
 
 @api_router.delete("/supplier-purchases/{pid}")
-async def delete_supplier_purchase(pid: str, admin=Depends(require_admin)):
+async def delete_supplier_purchase(pid: str, admin=Depends(require_action("delete:vendorLedger"))):
     # Reverse any stock credits this purchase made before deleting
     existing = await db.supplier_purchases.find_one({"id": pid}, {"_id": 0})
     if existing:
@@ -6118,7 +6184,7 @@ class SupplierPurchaseUpdate(BaseModel):
 
 @api_router.patch("/supplier-purchases/{pid}")
 async def update_supplier_purchase(
-    pid: str, body: SupplierPurchaseUpdate, admin=Depends(require_admin),
+    pid: str, body: SupplierPurchaseUpdate, admin=Depends(require_action("edit:vendorLedger")),
 ):
     existing = await db.supplier_purchases.find_one({"id": pid}, {"_id": 0})
     if not existing:
@@ -6276,7 +6342,7 @@ async def create_supplier_payment(body: SupplierPaymentIn, user=Depends(get_curr
 
 
 @api_router.delete("/supplier-payments/{pid}")
-async def delete_supplier_payment(pid: str, admin=Depends(require_admin)):
+async def delete_supplier_payment(pid: str, admin=Depends(require_action("delete:vendorLedger"))):
     res = await db.supplier_payments.delete_one({"id": pid})
     if res.deleted_count == 0:
         raise HTTPException(status_code=404, detail="Supplier payment not found")
@@ -6435,7 +6501,7 @@ async def list_sale_returns(
 
 
 @api_router.patch("/sale-returns/{rid}")
-async def update_sale_return(rid: str, body: SaleReturnUpdate, admin=Depends(require_admin)):
+async def update_sale_return(rid: str, body: SaleReturnUpdate, admin=Depends(require_action("edit:customerLedger"))):
     upd: Dict[str, Any] = {}
     if body.amount is not None:
         if float(body.amount) <= 0:
@@ -6460,7 +6526,7 @@ async def update_sale_return(rid: str, body: SaleReturnUpdate, admin=Depends(req
 
 
 @api_router.delete("/sale-returns/{rid}")
-async def delete_sale_return(rid: str, admin=Depends(require_admin)):
+async def delete_sale_return(rid: str, admin=Depends(require_action("delete:customerLedger"))):
     res = await db.sale_returns.delete_one({"id": rid})
     if res.deleted_count == 0:
         raise HTTPException(status_code=404, detail="Sale return not found")
@@ -6545,7 +6611,7 @@ async def list_purchase_returns(
 
 
 @api_router.patch("/purchase-returns/{rid}")
-async def update_purchase_return(rid: str, body: PurchaseReturnUpdate, admin=Depends(require_admin)):
+async def update_purchase_return(rid: str, body: PurchaseReturnUpdate, admin=Depends(require_action("edit:vendorLedger"))):
     upd: Dict[str, Any] = {}
     if body.amount is not None:
         if float(body.amount) <= 0:
@@ -6572,7 +6638,7 @@ async def update_purchase_return(rid: str, body: PurchaseReturnUpdate, admin=Dep
 
 
 @api_router.delete("/purchase-returns/{rid}")
-async def delete_purchase_return(rid: str, admin=Depends(require_admin)):
+async def delete_purchase_return(rid: str, admin=Depends(require_action("delete:vendorLedger"))):
     res = await db.purchase_returns.delete_one({"id": rid})
     if res.deleted_count == 0:
         raise HTTPException(status_code=404, detail="Purchase return not found")
@@ -6819,7 +6885,7 @@ async def get_item_bom(iid: str, user=Depends(get_current_user)):
 
 
 @api_router.put("/items/{iid}/bom")
-async def set_item_bom(iid: str, body: ItemBomUpdate, admin=Depends(require_admin)):
+async def set_item_bom(iid: str, body: ItemBomUpdate, admin=Depends(require_action("edit:products"))):
     """Replace the entire BOM for a SKU. Components are de-duplicated by
     raw_material_id (later entries win)."""
     sku = await db.items.find_one({"id": iid}, {"_id": 0, "id": 1, "name": 1})

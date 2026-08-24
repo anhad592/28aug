@@ -143,7 +143,8 @@ function VendorCombobox({ vendors, value, onChange }) {
 }
 
 export default function VendorLedger() {
-  const { isAdmin } = useAuth();
+  const { isAdmin, canAct } = useAuth();
+  const canEditVendorLedger = canAct("edit:vendorLedger");
   const [vendors, setVendors] = useState([]);
   const [draft, setDraft] = useState({
     startDate: isoDaysAgo(90),
@@ -502,7 +503,7 @@ export default function VendorLedger() {
             </div>
           )}
           <DialogFooter>
-            {isAdmin && detailRow && (
+            {canEditVendorLedger && detailRow && (
               <Button
                 onClick={() => { setEditPurchase(detailRow.raw); setDetailRow(null); }}
                 data-testid="vendor-ledger-edit-purchase"

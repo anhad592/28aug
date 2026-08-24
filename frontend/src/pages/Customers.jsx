@@ -25,7 +25,9 @@ const PREF_OPTIONS = {
 };
 
 export default function Customers() {
-  const { isAdmin } = useAuth();
+  const { isAdmin, canAct } = useAuth();
+  const canEditCustomers = canAct("edit:customers");
+  const canDeleteCustomers = canAct("delete:customers");
   const { t } = useTranslation();
   const [list, setList] = useState([]);
   const [priceLists, setPriceLists] = useState([]);
@@ -268,7 +270,7 @@ export default function Customers() {
       </div>
 
       {/* Bulk selection action bar — admin only, visible when something is selected */}
-      {isAdmin && selectedIds.size > 0 && (
+      {canDeleteCustomers && selectedIds.size > 0 && (
         <div data-testid="bulk-action-bar"
              className="bg-orange-50 border-2 border-[#E65100] rounded-sm p-3 flex items-center justify-between flex-wrap gap-3">
           <div className="text-sm font-bold text-[#7c2d12]" data-testid="bulk-selected-count">
@@ -288,7 +290,7 @@ export default function Customers() {
 
       <div className="bg-white border border-slate-200 rounded-sm">
         <div className="p-4 border-b border-slate-200 flex items-center gap-3 flex-wrap">
-          {isAdmin && filtered.length > 0 && (
+          {canDeleteCustomers && filtered.length > 0 && (
             <label className="flex items-center gap-2 text-xs font-bold text-slate-600 shrink-0 cursor-pointer">
               <input
                 type="checkbox"
@@ -309,7 +311,7 @@ export default function Customers() {
            {filtered.map((c) => (
              <div key={c.id} className="p-4 sm:p-5 flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3 hover:bg-slate-50 transition-colors"
                   data-testid={`customer-row-${c.id}`}>
-               {isAdmin && (
+               {canDeleteCustomers && (
                  <input
                    type="checkbox"
                    checked={selectedIds.has(c.id)}
@@ -357,26 +359,28 @@ export default function Customers() {
                  ) : <div className="mt-2 text-xs text-slate-400 italic">{t("customers.noPrefs")}</div>}
                </div>
                <div className="flex items-center gap-2 shrink-0 flex-wrap">
-                 {isAdmin && (
+                 {canEditCustomers && (
                    <Button size="sm" variant="outline" onClick={() => openEditDetails(c)}
                            data-testid={`edit-details-${c.id}`}
                            className="rounded-sm border-slate-300">
                      <Edit3 className="w-3.5 h-3.5 mr-1" /> {t("customers.editDetailsBtn")}
                    </Button>
                  )}
-                 {isAdmin && (
+                 {canEditCustomers && (
                    <Button size="sm" variant="outline" onClick={() => setBlockedCustomer(c)}
                            data-testid={`block-items-${c.id}`}
                            className="rounded-sm border-rose-200 text-rose-700 hover:bg-rose-50 hover:text-rose-800">
                      <ShieldOff className="w-3.5 h-3.5 mr-1" /> Block items
                    </Button>
                  )}
+                 {canEditCustomers && (
                  <Button size="sm" variant="outline" onClick={() => openEdit(c)}
                          data-testid={`edit-prefs-${c.id}`}
                          className="rounded-sm border-slate-300">
                    <Edit3 className="w-3.5 h-3.5 mr-1" /> {t("customers.prefsBtn")}
                  </Button>
-                 {isAdmin && (
+                 )}
+                 {canDeleteCustomers && (
                    <Button size="sm" variant="outline" onClick={() => del(c)}
                            data-testid={`delete-customer-${c.id}`}
                            className="rounded-sm border-rose-200 text-rose-600 hover:bg-rose-50 hover:text-rose-700">

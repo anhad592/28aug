@@ -26,7 +26,9 @@ function StatusBadge({ status }) {
 }
 
 export default function Orders() {
-  const { isAdmin } = useAuth();
+  const { isAdmin, canAct } = useAuth();
+  const canEditOrders = canAct("edit:orders");
+  const canDeleteOrders = canAct("delete:orders");
   const { t } = useTranslation();
   const [searchParams] = useSearchParams();
   const [orders, setOrders] = useState([]);
@@ -199,7 +201,7 @@ export default function Orders() {
                     {o.notes && <div className="mt-2 text-xs text-slate-500 italic">&ldquo;{o.notes}&rdquo;</div>}
                   </div>
                   <div className="flex items-center gap-2 w-full sm:w-auto">
-                    <Select value={o.status} onValueChange={(v) => updateStatus(o.id, v)}>
+                    <Select value={o.status} onValueChange={(v) => updateStatus(o.id, v)} disabled={!canEditOrders}>
                       <SelectTrigger data-testid={`status-select-${o.id}`} className="h-10 flex-1 sm:flex-none sm:w-36 rounded-sm">
                         <SelectValue />
                       </SelectTrigger>
@@ -207,14 +209,14 @@ export default function Orders() {
                         {STATUSES.map((s) => <SelectItem key={s} value={s}>{t(`orders.status.${s}`, s)}</SelectItem>)}
                       </SelectContent>
                     </Select>
-                    {isAdmin && (
+                    {canEditOrders && (
                       <Button variant="ghost" size="sm" onClick={() => setEditTarget(o)}
                               data-testid={`order-edit-${o.id}`}
                               className="h-10 w-10 p-0 rounded-sm text-slate-500 hover:text-[#E65100] hover:bg-orange-50 shrink-0">
                         <Edit3 className="w-4 h-4" />
                       </Button>
                     )}
-                    {isAdmin && (
+                    {canDeleteOrders && (
                       <Button variant="ghost" size="sm" onClick={() => del(o.id)}
                               data-testid={`order-delete-${o.id}`}
                               className="h-10 w-10 p-0 rounded-sm text-slate-500 hover:text-red-600 hover:bg-red-50 shrink-0">

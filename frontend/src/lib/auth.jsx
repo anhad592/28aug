@@ -101,6 +101,7 @@ export function AuthProvider({ children }) {
       logout,
       isAdmin: user?.role === "admin",
       can: (key) => hasPermission(user, key),
+      canAct: (key) => hasPermission(user, key),
     }}>
       {children}
     </AuthCtx.Provider>
