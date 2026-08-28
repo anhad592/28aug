@@ -1067,11 +1067,17 @@ def render_slip_pdf(payload: Dict[str, Any]) -> bytes:
     story.append(Spacer(1, 8))
 
     # ---- Bill/Cash and Private mark/Bags boxes ----
+    # Hide the CASH AMOUNT row entirely when the bill amount already covers
+    # the full GST-inclusive grand total (cash is 0 within a ±₹2 tolerance).
+    _left_rows = [
+        [Paragraph("BILL AMOUNT", s_lbl), Paragraph(f"<b>₹{_fmt_num(bill_amount)}/-</b>", s_lblv_r)],
+    ]
+    if float(cash_amount or 0) > 2:
+        _left_rows.append(
+            [Paragraph("CASH AMOUNT", s_lbl), Paragraph(f"<b>₹{_fmt_num(cash_amount)}/-</b>", s_lblv_r)]
+        )
     left_box = Table(
-        [
-            [Paragraph("BILL AMOUNT", s_lbl), Paragraph(f"<b>₹{_fmt_num(bill_amount)}/-</b>", s_lblv_r)],
-            [Paragraph("CASH AMOUNT", s_lbl), Paragraph(f"<b>₹{_fmt_num(cash_amount)}/-</b>", s_lblv_r)],
-        ],
+        _left_rows,
         colWidths=[35 * mm, 35 * mm],
     )
     left_box.setStyle(

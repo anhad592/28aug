@@ -17,7 +17,24 @@ api.interceptors.response.use(
   (r) => r,
   (err) => {
     if (err?.response?.status === 401) {
-      // optional: redirect to login
+      // The stored token is invalid or its user no longer exists
+      // (e.g. after a database restore that replaced the users
+      // collection). Instead of leaving the app in a broken state where
+      // every request fails with "User not found" / "Invalid token" and
+      // stale cached IDs trigger "Customer not found", clear the session
+      // and bounce the user to a clean login screen.
+      const url = err?.config?.url || "";
+      const isAuthCall = url.includes("/auth/login") || url.includes("/auth/verify-otp");
+      if (!isAuthCall) {
+        try {
+          localStorage.removeItem("foms_token");
+          localStorage.removeItem("foms_user");
+        } catch (_) { /* ignore */ }
+        // Avoid redirect loops if we're already on the login page.
+        if (typeof window !== "undefined" && !window.location.pathname.startsWith("/login")) {
+          window.location.assign("/login");
+        }
+      }
     }
     // Normalize FastAPI / Pydantic v2 validation errors so `detail` is
     // ALWAYS a plain string by the time UI code reads it. Pydantic returns

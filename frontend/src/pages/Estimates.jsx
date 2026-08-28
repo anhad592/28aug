@@ -956,15 +956,20 @@ export default function Estimates() {
                   ₹{Math.round(estimate.totals.bill_amount).toLocaleString("en-IN")}/-
                 </span>
               </div>
-              <div className="px-3 py-2 flex items-center justify-between gap-6">
-                <span className="text-xs font-bold uppercase tracking-wider text-slate-700">
-                  Cash amount
-                </span>
-                <span className="tabular-nums font-bold text-slate-900"
-                      data-testid="estimate-cash-total">
-                  ₹{estimate.totals.cash_amount.toLocaleString("en-IN")}/-
-                </span>
-              </div>
+              {/* Hide the Cash row entirely when the bill amount already
+                  covers the full GST-inclusive grand total (cash is 0 within
+                  a ±₹2 rounding tolerance) — only the bill amount shows. */}
+              {Number(estimate.totals.cash_amount) > 2 && (
+                <div className="px-3 py-2 flex items-center justify-between gap-6">
+                  <span className="text-xs font-bold uppercase tracking-wider text-slate-700">
+                    Cash amount
+                  </span>
+                  <span className="tabular-nums font-bold text-slate-900"
+                        data-testid="estimate-cash-total">
+                    ₹{estimate.totals.cash_amount.toLocaleString("en-IN")}/-
+                  </span>
+                </div>
+              )}
               <div className="px-3 py-2 flex items-center justify-between gap-6 bg-orange-50">
                 <span className="text-xs font-extrabold uppercase tracking-wider text-[#E65100]">
                   Grand total

@@ -1048,14 +1048,21 @@ export default function DispatchLedger() {
                     // CUSTOMER doc, not the dispatch; `bag_count` and
                     // `total_value` (bill amount) live on the dispatch.
                     const raw = r.raw || {};
-                    const hasGr = !!(raw.gr_number && String(raw.gr_number).trim());
-                    const hasBags = Number(raw.bag_count || 0) > 0;
+                    // Ludhiana parties do NOT require a GR number, bag count or
+                    // a private mark — the printed slip hides all three for
+                    // them — so those must not count against completeness or
+                    // show up as "Missing". Uses the same location detection
+                    // the slip preview/share logic uses below.
+                    const _locHay = `${raw.customer_city || ""} | ${selectedParty?.city || ""} | ${selectedParty?.location || ""} | ${selectedParty?.address || ""}`.toLowerCase();
+                    const isLudhianaParty = /\bludhiana\b/.test(_locHay);
+                    const hasGr = isLudhianaParty || !!(raw.gr_number && String(raw.gr_number).trim());
+                    const hasBags = isLudhianaParty || Number(raw.bag_count || 0) > 0;
                     const hasPvt = !!(selectedParty?.private_mark && String(selectedParty.private_mark).trim());
                     // Bill-number-mode parties satisfy the "mark" with a per-
                     // dispatch Bill Number instead of a private mark.
                     const billMode = !!selectedParty?.bill_number_mode;
                     const hasBillNo = !!(raw.bill_number && String(raw.bill_number).trim());
-                    const hasMarkReq = billMode ? hasBillNo : hasPvt;
+                    const hasMarkReq = isLudhianaParty ? true : (billMode ? hasBillNo : hasPvt);
                     const hasBill = Number(raw.total_value || 0) > 0;
                     const isComplete = isDispatch && hasGr && hasBags && hasMarkReq && hasBill;
                     const isIncompleteDispatch = isDispatch && !isComplete;
@@ -1510,8 +1517,8 @@ export default function DispatchLedger() {
                       </div>
                       {/* Hide "Cash amount" when it is nil — i.e. when the bill
                           amount already equals (or covers) total + 18% GST, so
-                          there is no cash component to print. */}
-                      {cashAmount > 0 && (
+                          there is no cash component to print (±₹2 tolerance). */}
+                      {cashAmount > 2 && (
                         <div className="px-3 py-2 flex items-center justify-between gap-6">
                           <span className="text-xs font-bold uppercase tracking-wider text-slate-700">Cash amount</span>
                           <span className="tabular-nums font-bold text-slate-900">₹{cashAmount.toLocaleString("en-IN")}/-</span>

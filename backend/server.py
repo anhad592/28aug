@@ -625,7 +625,7 @@ async def seed_db():
     # Users
     if await db.users.count_documents({}) == 0:
         admin = {"id": str(uuid.uuid4()), "email": "admin@factory.com", "username": "admin", "name": "Admin",
-                 "password": hash_password("admin123"), "role": "admin", "otp_login": True, "created_at": now_iso()}
+                 "password": hash_password("admin123"), "role": "admin", "otp_login": False, "created_at": now_iso()}
         user = {"id": str(uuid.uuid4()), "email": "user@factory.com", "username": "user", "name": "Operator",
                 "password": hash_password("user123"), "role": "user", "otp_login": False, "created_at": now_iso()}
         await db.users.insert_many([admin, user])
@@ -633,7 +633,7 @@ async def seed_db():
     else:
         # Backfill otp_login: admins default ON (preserves existing behaviour),
         # non-admins default OFF. Only sets the field where it is missing.
-        await db.users.update_many({"otp_login": {"$exists": False}, "role": "admin"}, {"$set": {"otp_login": True}})
+        await db.users.update_many({"otp_login": {"$exists": False}, "role": "admin"}, {"$set": {"otp_login": False}})
         await db.users.update_many({"otp_login": {"$exists": False}, "role": {"$ne": "admin"}}, {"$set": {"otp_login": False}})
         # Backfill username for any pre-existing user (local-part of email, deduped)
         seen = set(u.get("username") for u in await db.users.find({"username": {"$exists": True}}, {"_id": 0, "username": 1}).to_list(1000) if u.get("username"))
